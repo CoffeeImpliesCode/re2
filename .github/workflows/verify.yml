@@ -1,0 +1,1047 @@
+name: verify
+
+# This fork's CI. Nothing in it is copied or retargeted from another
+# maintainer's.
+#
+# Upstream RE2 ships seven workflows at `vendor/re2/.github/workflows/`:
+# ci.yml, ci-cmake.yml, ci-bazel.yml, pages.yml, python.yml, release.yml and
+# release-bazel.yml. They are retained verbatim as provenance bytes -- group F
+# of UPSTREAM.sha256 records all nine files under that directory -- and they are
+# INERT here: GitHub reads workflows only from `.github/workflows/` at the
+# repository root, and `vendor/re2/.github/workflows/` is two levels down. That
+# is deliberate and worth stating, because two of them would do real damage if
+# they were ever live in this repository:
+#
+#   release.yml        `on: push: tags:
+#                      ['2[0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]']`, which matches
+#                      this fork's own pin `2025-11-05`, with `contents: write`
+#                      and `id-token: write`, running `gh release create` and
+#                      `gh release upload`.
+#   release-bazel.yml  a reusable workflow that pushes to
+#                      `re2-machine/bazel-central-registry` with a repository
+#                      token.
+#
+# Both are Google's release infrastructure, aimed at Google's release process,
+# and neither is this fork's to run. Nothing was retargeted from them: this file
+# already runs every gate below, and the Zig build is the only build definition
+# this repository has.
+#
+# Two rules govern what is in here and what is not.
+#
+#   * No `continue-on-error`, anywhere, on any step or matrix row. A tolerated
+#     row is indistinguishable from a target that was quietly dropped, and a
+#     dropped target is the one failure mode this file exists to make impossible
+#     to hide. If a cell fails it fails, and the compiler output is the evidence.
+#   * The full 53-platform matrix is NOT in this file, and deliberately so.
+#     `cross-test` is a host-local tool that sources `cross-test.profile.sh`
+#     from the package root and walks the published Zig 0.16.0 tier table.
+#     Wrapping that in an availability check here would turn a missing gate into
+#     a green one, which is worse than not having the job at all: a reader would
+#     see a passing check where there is no coverage. The gate lives with the
+#     driver that owns it, and this file covers the six targets it can name in
+#     full.
+#
+# Jobs, and the question each one asks:
+#
+#   provenance           do the 1671 pinned upstream bytes still hash to what
+#                        UPSTREAM.sha256 records, is the vendored file set still
+#                        exactly the recorded one, and are the licences, the
+#                        release digest and the declared Abseil version still
+#                        where the records say they are
+#   native               does the whole in-tree graph build, pass its behavioural
+#                        tests in Debug and at ReleaseSafe, run the smoke
+#                        program, compile for all six required targets, and build
+#                        the standalone consumer package -- and does every one of
+#                        those again in the shared delivery
+#   installed-consumers  do a C program and a C++ program, both living entirely
+#                        outside the build graph, compile, link and run against
+#                        what `zig build` INSTALLED, and does the installed
+#                        pkg-config metadata describe what was actually installed
+#   shared-delivery      do the shared objects carry the right sonames, resolve
+#                        each other through $ORIGIN, and still work from a prefix
+#                        that has been moved since the build wrote it
+#   cross                does the library, the bridge, the facade, the tests and
+#                        the smoke program compile and link for each of the six
+#                        required targets, without running any of them
+#
+# Nothing here needs the network once checkout and the toolchain are in place.
+# `build.zig.zon` has no `.dependencies`, so there is nothing for Zig to fetch,
+# no job installs a package manager and no job downloads a tarball.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  ZIG_VERSION: "0.16.0"
+
+jobs:
+  # ---------------------------------------------------------------------------
+  provenance:
+    name: licence and provenance integrity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Required fork records are present
+        run: |
+          set -euo pipefail
+          for f in UPSTREAM.md UPSTREAM.sha256 NOTICE.md CHANGELOG.md FORK-NOTES.md \
+                   FORK-LICENSE.md README.md README.zig.md \
+                   tools/check-provenance.sh package.nix flake.nix \
+                   cross-test.profile.sh; do
+            test -s "$f" || { echo "missing or empty: $f" >&2; exit 1; }
+          done
+
+      # Every vendored byte, against the digest recorded for it: 1671 records
+      # and one command -- the 22 RE2 translation units and their headers, the
+      # 152 Abseil units, the 381 Abseil headers and `.inc` fragments, the 89
+      # licence/notice/build records and the 1008 retained upstream files. A
+      # single edited byte in any of them is one line of output.
+      - name: Immutable upstream source, licence and build-record integrity
+        run: sha256sum -c UPSTREAM.sha256
+
+      # The four things a checksum run cannot see:
+      #
+      #   * an ADDED file. `sha256sum -c` walks the manifest, so a path nobody
+      #     wrote down is invisible to it; the script compares the recorded path
+      #     set against `find vendor \( -type f -o -type l \)` side by side. The
+      #     `-o -type l` matters: `vendor/re2/python/LICENSE` is a symlink to
+      #     ../LICENSE in the upstream release tarball and the manifest records
+      #     it, so a `-type f` comparison would report the tree as missing a
+      #     file the record names.
+      #   * the release digest agreeing across UPSTREAM.md and UPSTREAM.sha256,
+      #     so the two cannot name different releases.
+      #   * both upstream licence texts still carrying upstream's own wording,
+      #     upstream's README still being a different file from this fork's, and
+      #     NOTICE.md still naming both upstream copyright lines.
+      #   * the Abseil version RE2 itself declares at
+      #     vendor/re2/MODULE.bazel:16 still being the one this SDK records.
+      #
+      # It compiles nothing, links nothing and runs no target binary.
+      - name: The provenance gate itself
+        run: tools/check-provenance.sh
+
+  # ---------------------------------------------------------------------------
+  native:
+    name: native ${{ matrix.job }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - job: install
+            flags: "install"
+          - job: test-debug
+            flags: "test"
+          - job: test-release-safe
+            flags: "test -Doptimize=ReleaseSafe"
+          - job: smoke
+            flags: "smoke"
+          - job: check
+            flags: "check"
+          - job: consumer
+            flags: "consumer"
+
+          # The shared delivery, against every entry point that builds one
+          # target. `-Dlinkage` selects a delivery and nothing else, so a mode
+          # that only compiled would not be evidence that the shared closure
+          # resolves -- and `test` and `smoke` are the rows that run against it.
+          #
+          # There is deliberately no `check -Dlinkage=dynamic` row. `check`
+          # walks the six-target matrix and `wasm32-wasi` has no dynamic linker,
+          # so a full-matrix shared check cannot pass by construction: the build
+          # refuses that cell rather than substituting a static archive under
+          # the option's name. The shared cross compile is done for one named
+          # dynamic-capable target in the `shared-delivery` job instead, and the
+          # default `check` rows above still compile all six targets statically.
+          - job: install-shared
+            flags: "install -Dlinkage=dynamic"
+          - job: test-debug-shared
+            flags: "test -Dlinkage=dynamic"
+          - job: test-release-safe-shared
+            flags: "test -Doptimize=ReleaseSafe -Dlinkage=dynamic"
+          - job: smoke-shared
+            flags: "smoke -Dlinkage=dynamic"
+          - job: consumer-shared
+            flags: "consumer -Dlinkage=dynamic"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+      - name: zig build ${{ matrix.job }}
+        run: zig build ${{ matrix.flags }} -j8 --summary all
+
+  # ---------------------------------------------------------------------------
+  # Two programs that live entirely outside the build graph and are compiled
+  # against what `zig build` installed. Nothing here can see the Zig facade, the
+  # translated C module or the build's own include paths: one program's only
+  # include is the installed `re2_bridge.h`, the other's only includes are the
+  # installed `re2/re2.h` and `absl/strings/string_view.h`. That is the whole
+  # point of installing a package.
+  installed-consumers:
+    name: installed C bridge, native C++ consumer and pkg-config metadata
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+
+      # This is what produces `zig-out`: the three static archives, the bridge
+      # header, and the whole of the upstream `re2/`, `util/` and `absl/` header
+      # trees.
+      - name: Build and install
+        run: zig build install -j8 --summary all
+
+      # The installed header closure, named from the build graph's own mapping:
+      # `vendor/re2/re2` installs AS `include/re2` (pointing it at `vendor/re2`
+      # would give `include/re2/re2/re2.h` and break every include), so
+      # `#include <re2/re2.h>` resolves and `#include <util/strutil.h>` resolves
+      # beside it. The Abseil `.inc` files come along with the headers: an
+      # `-h`-only Abseil tree looks complete and does not compile, because
+      # absl/numeric/int128.h:1194,1196 and absl/time/clock.cc:63,65 include
+      # their implementation fragments by name.
+      - name: the installed header closure is the whole tree
+        run: |
+          set -euo pipefail
+          for header in \
+            zig-out/include/re2_bridge.h \
+            zig-out/include/re2/re2.h \
+            zig-out/include/re2/stringpiece.h \
+            zig-out/include/util/strutil.h \
+            zig-out/include/absl/base/config.h \
+            zig-out/include/absl/strings/string_view.h
+          do
+            if [ ! -f "$header" ]; then
+              echo "installed header closure is missing $header" >&2
+              find zig-out/include -maxdepth 2 -type d | LC_ALL=C sort >&2
+              exit 1
+            fi
+          done
+          if [ -d zig-out/include/re2/re2 ]; then
+            echo "re2/re2/ exists: the source tree was installed as re2/re2 rather than as re2" >&2
+            exit 1
+          fi
+          incs=$(find zig-out/include/absl -name '*.inc' | wc -l)
+          if [ "$incs" -lt 1 ]; then
+            echo "no Abseil .inc implementation fragment was installed" >&2
+            exit 1
+          fi
+          echo "  re2, util and absl header trees installed, $incs Abseil .inc fragments"
+
+      # The compiled C++ runtime belongs to the ELF shared route and to no
+      # other. This job installs the default delivery, which is static, so it is
+      # also where the converse is gated: a static tree that installed a
+      # `libre2cpp`, or the licence texts that cover one, would be shipping an
+      # artifact nothing links and records for a route that does not exist.
+      - name: the static delivery installs no compiler C++ runtime
+        run: |
+          set -euo pipefail
+          for candidate in zig-out/lib/libre2cpp.*; do
+            if [ -e "$candidate" ]; then
+              echo "the static delivery installed $candidate" >&2
+              ls -l zig-out/lib >&2 || true
+              exit 1
+            fi
+          done
+          for runtime in libcxx libcxxabi libunwind; do
+            record="zig-out/share/licenses/re2/LICENSE.$runtime.txt"
+            if [ -e "$record" ]; then
+              echo "the static delivery installed $record, which covers only the ELF shared route's libre2cpp" >&2
+              ls -l zig-out/share/licenses/re2 >&2 || true
+              exit 1
+            fi
+          done
+          echo "  static delivery: no libre2cpp, and none of its three licence texts"
+
+      # A redistributable has to carry the terms of what it redistributes, on
+      # the ELF shared route the terms are three more files, and on every route
+      # both upstream licences are installed under their own names beside the
+      # fork's records.
+      - name: the installed licence and notice records are present
+        run: |
+          set -euo pipefail
+          for record in \
+            zig-out/share/licenses/re2/LICENSE.re2 \
+            zig-out/share/licenses/re2/LICENSE.abseil \
+            zig-out/share/licenses/re2/NOTICE.md \
+            zig-out/share/licenses/re2/FORK-LICENSE.md \
+            zig-out/share/licenses/re2/UPSTREAM.md \
+            zig-out/share/licenses/re2/UPSTREAM.sha256
+          do
+            if [ ! -s "$record" ]; then
+              echo "the install is missing or has an empty $record" >&2
+              ls -l zig-out/share/licenses/re2 >&2 || true
+              exit 1
+            fi
+          done
+          echo "  both upstream licences and every fork record are installed"
+
+      # A C consumer of the installed bridge, reached the way a C program
+      # reaches it: the one installed public header, the three installed
+      # archives, and no Zig code. The header includes only `<stddef.h>` and
+      # `<stdint.h>` and names no upstream type, so `-Izig-out/include` is the
+      # whole of the include path this program needs -- nothing else is passed.
+      #
+      # A declaration whose type is wrong fails to compile; a declaration the
+      # bridge archive does not define fails to link; a rejected argument that
+      # still wrote its out parameter fails at run time. Every expected value
+      # below is fixed by hand from RE2's documented behaviour, cited in the
+      # source, and is not read out of a previous run.
+      - name: installed C bridge compiles, links and runs
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/c_bridge_consumer.c" <<'C'
+          /* The installed C bridge, reached the way a C program reaches it:
+           * the one installed public header, the three installed archives, and
+           * no Zig code. `re2_bridge.h` includes only <stddef.h> and <stdint.h>
+           * and names no upstream type, so nothing but the installed include
+           * directory is needed to compile this file.
+           *
+           * Every expected value below is fixed by hand from RE2's documented
+           * behaviour, cited at the check that uses it.
+           */
+          #include <re2_bridge.h>
+
+          #include <stdio.h>
+          #include <string.h>
+
+          int main(void) {
+            /* "ruby:1234" is the example RE2's own header uses for FullMatch
+             * (re2/re2.h:87): (\w+)(?::(\d+))? . NumberOfCapturingGroups counts
+             * parenthesised sub-expressions and excludes the overall match
+             * (re2/re2.h:547-551), so this pattern has two and a span array
+             * needs three entries (re2/re2.cc:692-694). */
+            static const char kPattern[] = "(\\w+)(?::(\\d+))?";
+            static const char kSubject[] = "ruby:1234";
+            Re2BridgeRegex *regex = NULL;
+            Re2BridgeSpan spans[3];
+            size_t span_count = 0, needed = 0, quoted_len = 0;
+            char quoted[64];
+            Re2BridgeOptions options;
+            int status = 0;
+            Re2BridgeStatus rc;
+
+          #define FAIL(n) do { status = (n); goto done; } while (0)
+
+            /* Zero-filling this struct would NOT mean "upstream's defaults":
+             * log_errors defaults to true (re2/re2.h:683) and case_sensitive to
+             * true (re2/re2.h:688), so a zero means "off" for both. That is why
+             * the field is a tri-state and why this struct is initialised. */
+            re2br_options_init(&options);
+            options.log_errors = RE2BRIDGE_FLAG_OFF;
+
+            rc = re2br_compile(&options, kPattern, sizeof kPattern - 1, &regex);
+            if (rc != RE2BRIDGE_OK) FAIL(1);
+            /* A compiled pattern reports no error, and an empty one is the test
+             * (re2/re2.h:307-316). */
+            if (re2br_regex_error(regex)[0] != '\0') FAIL(2);
+            if (re2br_regex_group_count(regex) != 2) FAIL(3);
+
+            /* The sizing call: a NULL span buffer, and *out_span_count still
+             * receives the full count on every status. */
+            rc = re2br_match(regex, RE2BRIDGE_UNANCHORED,
+                             kSubject, sizeof kSubject - 1,
+                             0, sizeof kSubject - 1, NULL, 0, &span_count);
+            if (rc != RE2BRIDGE_OK) FAIL(4);
+            if (span_count != 3) FAIL(5);
+
+            rc = re2br_match(regex, RE2BRIDGE_UNANCHORED,
+                             kSubject, sizeof kSubject - 1,
+                             0, sizeof kSubject - 1, spans, 3, &needed);
+            if (rc != RE2BRIDGE_OK) FAIL(6);
+            /* Byte offsets into the subject: the whole match is [0,9), the word
+             * "ruby" is [0,4), and the digits "1234" are [5,9). */
+            if (spans[0].start != 0 || spans[0].end != 9) FAIL(7);
+            if (spans[1].start != 0 || spans[1].end != 4) FAIL(8);
+            if (spans[2].start != 5 || spans[2].end != 9) FAIL(9);
+
+            /* This bound check is the bridge's, not upstream's: RE2::Match
+             * tests `startpos > endpos` and returns plain false for it and for
+             * an ordinary no-match alike (re2/re2.cc:670-677), so a caller that
+             * forwarded the call could never tell a programming mistake from a
+             * declined match. A rejected argument writes nothing, so the
+             * sentinel below has to survive the call. */
+            spans[2].start = (size_t)-2;
+            spans[2].end = (size_t)-2;
+            rc = re2br_match(regex, RE2BRIDGE_UNANCHORED,
+                             kSubject, sizeof kSubject - 1,
+                             7, 2, spans, 3, &needed);
+            if (rc != RE2BRIDGE_INVALID_ARGUMENT) FAIL(10);
+            if (spans[2].start != (size_t)-2) FAIL(11);
+
+            /* A genuine no-match is the one status that is neither success nor
+             * failure, and it leaves every span untouched. ANCHOR_START at
+             * offset 4 cannot match, because the pattern's first element is \w
+             * and position 4 is the colon. */
+            rc = re2br_match(regex, RE2BRIDGE_ANCHOR_START,
+                             kSubject, sizeof kSubject - 1,
+                             4, sizeof kSubject - 1, spans, 3, &needed);
+            if (rc != RE2BRIDGE_NO_MATCH) FAIL(12);
+            if (spans[2].start != (size_t)-2) FAIL(13);
+
+            /* ANCHOR_BOTH over the same subject and pattern does match, which
+             * keeps check 12 from passing because the anchor was ignored. */
+            rc = re2br_match(regex, RE2BRIDGE_ANCHOR_BOTH,
+                             kSubject, sizeof kSubject - 1,
+                             0, sizeof kSubject - 1, spans, 3, &needed);
+            if (rc != RE2BRIDGE_OK) FAIL(14);
+
+            /* QuoteMeta escapes every metacharacter (re2/re2.h:515-520), so the
+             * escaped form matches its input literally. Two-pass: a short buffer
+             * is BUFFER_TOO_SMALL and still reports the required length. */
+            rc = re2br_quote_meta("a.b*c", 5, NULL, 0, &quoted_len);
+            if (rc != RE2BRIDGE_OK || quoted_len != 8) FAIL(15);
+            rc = re2br_quote_meta("a.b*c", 5, quoted, 2, &needed);
+            if (rc != RE2BRIDGE_BUFFER_TOO_SMALL) FAIL(16);
+            if (needed != 8) FAIL(17);
+            {
+              size_t out_len = 0;
+              rc = re2br_quote_meta("a.b*c", 5, quoted, sizeof quoted, &out_len);
+              if (rc != RE2BRIDGE_OK || out_len != 8) FAIL(18);
+            }
+            if (memcmp(quoted, "a\\.b\\*c", 8) != 0) FAIL(19);
+
+            /* CheckRewriteString is upstream's own answer for a rewrite asking
+             * for a group the pattern does not have (re2/re2.h:592-601); the
+             * bridge surfaces that status rather than swallowing it. */
+            rc = re2br_check_rewrite(regex, "\\2-\\1", 5);
+            if (rc != RE2BRIDGE_OK) FAIL(20);
+            rc = re2br_check_rewrite(regex, "\\9", 2);
+            if (rc != RE2BRIDGE_BAD_REWRITE) FAIL(21);
+
+            /* The rewrite \2-\1 over the same two groups: the token is one digit
+             * after the backslash (re2/re2.h:467-471), so it swaps the digits
+             * and the word. */
+            {
+              char out[64];
+              size_t out_len = 0;
+              rc = re2br_extract(regex, RE2BRIDGE_UNANCHORED,
+                                 kSubject, sizeof kSubject - 1,
+                                 0, sizeof kSubject - 1,
+                                 "\\2-\\1", 5, out, sizeof out, &out_len);
+              if (rc != RE2BRIDGE_OK) FAIL(22);
+              if (out_len != 9 || memcmp(out, "1234-ruby", 9) != 0) FAIL(23);
+            }
+            /* And a no-match extracts nothing at all. */
+            {
+              char out[64];
+              size_t out_len = 12345;
+              rc = re2br_extract(regex, RE2BRIDGE_ANCHOR_START,
+                                 kSubject, sizeof kSubject - 1,
+                                 4, sizeof kSubject - 1,
+                                 "\\2-\\1", 5, out, sizeof out, &out_len);
+              if (rc != RE2BRIDGE_NO_MATCH) FAIL(24);
+              if (out_len != 0) FAIL(25);
+            }
+
+            /* A pattern that does not compile is BAD_PATTERN and still hands
+             * back a live handle, because upstream's error() reads off that
+             * object (re2/re2.h:313-316) and destroying it here would destroy
+             * the one explanation upstream offers. Its group count is -1,
+             * because the constructor resets num_captures_ to -1 and assigns the
+             * real count only once the parse succeeds (re2/re2.cc:223,276). */
+            {
+              Re2BridgeRegex *bad = NULL;
+              rc = re2br_compile(&options, "(unclosed", 8, &bad);
+              if (rc != RE2BRIDGE_BAD_PATTERN) FAIL(26);
+              if (bad == NULL) FAIL(27);
+              if (re2br_regex_error(bad)[0] == '\0') FAIL(28);
+              if (re2br_regex_group_count(bad) != -1) FAIL(29);
+              /* Matching a refused pattern is refused, not answered. */
+              rc = re2br_match(bad, RE2BRIDGE_UNANCHORED,
+                               kSubject, sizeof kSubject - 1,
+                               0, sizeof kSubject - 1, spans, 3, &needed);
+              if (rc != RE2BRIDGE_INVALID_ARGUMENT) FAIL(30);
+              re2br_regex_destroy(bad);
+            }
+
+            /* The empty pattern is a real pattern and compiles, with no
+             * capturing groups. */
+            {
+              Re2BridgeRegex *empty = NULL;
+              rc = re2br_compile(NULL, NULL, 0, &empty);
+              if (rc != RE2BRIDGE_OK) FAIL(31);
+              if (re2br_regex_group_count(empty) != 0) FAIL(32);
+              re2br_regex_destroy(empty);
+            }
+
+            /* An out-of-range flag is rejected, not clamped and not ignored. */
+            options.posix_syntax = 99;
+            {
+              Re2BridgeRegex *tmp = NULL;
+              rc = re2br_compile(&options, kPattern, sizeof kPattern - 1, &tmp);
+              if (rc != RE2BRIDGE_INVALID_ARGUMENT) FAIL(33);
+              re2br_regex_destroy(tmp);
+            }
+
+            /* NULL is accepted and ignored by the destructor. */
+            re2br_regex_destroy(NULL);
+            status = 100;
+
+          done:
+            re2br_regex_destroy(regex);
+            if (status != 100) {
+              std::printf("  c bridge consumer FAILED at check %d\n", status);
+              return 1;
+            }
+            std::printf("installed C bridge consumer\n");
+            std::printf("  groups 2, span count 3: $0 [0,9) $1 [0,4) $2 [5,9)\n");
+            std::printf("  QuoteMeta \"a.b*c\" -> \"a\\\\.b\\\\*c\"\n");
+            std::printf("  rewrite \\2-\\1 -> \"1234-ruby\"; \\9 -> BAD_REWRITE\n");
+            return 0;
+          }
+          C
+
+          # The three archives in dependency order -- the bridge calls into RE2,
+          # RE2 calls into Abseil -- and `-lc++`, because all three are compiled
+          # from C++ and carry C++ runtime references. A C driver does not link
+          # libc++ on its own.
+          zig cc -std=c11 \
+            -Izig-out/include \
+            "$RUNNER_TEMP/c_bridge_consumer.c" \
+            -Lzig-out/lib -lre2bridge -lre2 -labsl -lc++ \
+            -o "$RUNNER_TEMP/c_bridge_consumer"
+          "$RUNNER_TEMP/c_bridge_consumer"
+
+      # The upstream C++ library, reached the way an ordinary C++ program
+      # reaches it: `#include <re2/re2.h>` and `#include
+      # <absl/strings/string_view.h>` from the installed tree, and the installed
+      # C++ archives. No Zig, no bridge header, nothing from the build's own
+      # include configuration.
+      - name: installed upstream RE2 and Abseil headers compile, link and run
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/cxx_consumer.cpp" <<'CPP'
+          /* The installed upstream C++ library, reached the way an ordinary C++
+           * program reaches it: the installed re2/re2.h, the installed C++
+           * archives, and no Zig and no bridge header anywhere. */
+          #include <re2/re2.h>
+          #include <absl/strings/string_view.h>
+
+          #include <cstdio>
+          #include <string>
+
+          namespace {
+
+          int fail(int code, const char* what) {
+            std::printf("  c++ consumer FAILED at check %d: %s\n", code, what);
+            return 1;
+          }
+
+          }  // namespace
+
+          int main() {
+            /* Two capturing groups, so three submatches are asked for:
+             * NumberOfCapturingGroups excludes the overall match
+             * (re2/re2.h:547-551) and the array is sized at 1 + that
+             * (re2/re2.cc:692-694). */
+            RE2 re(absl::string_view("(\\w+)(?::(\\d+))?"));
+            if (!re.ok()) {
+              std::printf("  compile error: %s\n", re.error().c_str());
+              return fail(1, "pattern compiled");
+            }
+            if (re.NumberOfCapturingGroups() != 2) return fail(2, "group count");
+
+            const std::string subject("ruby:1234");
+            absl::string_view submatch[3];
+            if (!re.Match(subject, 0, subject.size(), RE2::UNANCHORED,
+                          absl::string_view::npos, submatch, 3)) {
+              return fail(3, "matched");
+            }
+            if (submatch[0] != absl::string_view("ruby:1234")) return fail(4, "$0");
+            if (submatch[1] != absl::string_view("ruby")) return fail(5, "$1");
+            if (submatch[2] != absl::string_view("1234")) return fail(6, "$2");
+
+            /* The same call anchored at both ends succeeds, so that the
+             * anchored refusal below is not just an ignored anchor. */
+            if (!re.Match(subject, 0, subject.size(), RE2::ANCHOR_BOTH,
+                          absl::string_view::npos, submatch, 3)) {
+              return fail(7, "anchored match");
+            }
+
+            /* Rewrite, composed the way upstream composes it: \2-\1 over the
+             * submatches this call already produced (re2/re2.h:610-616). */
+            std::string rewritten;
+            if (!re.Rewrite(&rewritten, "\\2-\\1", submatch, 3)) {
+              return fail(8, "rewrite");
+            }
+            if (rewritten != "1234-ruby") {
+              std::printf("  rewrite gave \"%s\"\n", rewritten.c_str());
+              return fail(9, "rewrite text");
+            }
+
+            /* CheckRewriteString is upstream's own answer for a rewrite that
+             * asks for a group the pattern does not have
+             * (re2/re2.h:592-601), and MaxSubmatch is how upstream sizes one
+             * (re2/re2.h:605). */
+            std::string error;
+            if (!re.CheckRewriteString("\\9", &error)) return fail(10, "bad rewrite accepted");
+            if (error.empty()) return fail(11, "bad rewrite reported no reason");
+            if (!re.CheckRewriteString("\\2-\\1", &error)) return fail(12, "good rewrite refused");
+            if (RE2::MaxSubmatch("\\2-\\1") != 2) return fail(13, "MaxSubmatch");
+
+            /* QuoteMeta is static and escapes every metacharacter
+             * (re2/re2.h:515-520). */
+            if (RE2::QuoteMeta("a.b*c") != "a\\.b\\*c") return fail(14, "QuoteMeta");
+
+            /* The escaped form is a pattern that matches its own input, which is
+             * the property QuoteMeta exists for. */
+            const RE2 literal(RE2::QuoteMeta("a.b*c"));
+            if (!literal.ok()) return fail(15, "escaped pattern compiled");
+            if (!RE2::FullMatch(absl::string_view("a.b*c"), literal)) return fail(16, "escaped match");
+            if (RE2::FullMatch(absl::string_view("axbxc"), literal)) return fail(17, "escaped over-match");
+
+            /* A pattern that does not compile reports ok() == false and a
+             * non-empty error(), and leaves num_captures_ at -1
+             * (re2/re2.cc:223,276). */
+            RE2::Options quiet;
+            quiet.set_log_errors(false);
+            RE2 bad(absl::string_view("(unclosed"), quiet);
+            if (bad.ok()) return fail(18, "unclosed pattern accepted");
+            if (bad.error().empty()) return fail(19, "unclosed pattern had no error");
+            if (bad.NumberOfCapturingGroups() != -1) return fail(20, "bad group count");
+
+            /* The two encodings RE2 defines at this pin (re2/re2.h:673-676,680);
+             * there is no third, and no "any byte" mode. The same pattern and
+             * the same two bytes answer differently under the two, which is the
+             * only thing the distinction is for: U+00E9 is two bytes in UTF-8 and
+             * two characters in latin1, so `.` matches the subject as one code
+             * point under the default and refuses it as two characters under
+             * latin1. FullMatch anchors the whole text, so no `^`/`$` is needed
+             * and no claim about anchor semantics is made here. */
+            RE2::Options latin1;
+            latin1.set_encoding(RE2::Options::EncodingLatin1);
+            latin1.set_log_errors(false);
+            RE2 one_char(".", latin1);
+            if (!one_char.ok()) return fail(21, "latin1 pattern");
+            if (!RE2::FullMatch(absl::string_view("\xc3\xa9"),
+                                RE2(absl::string_view(".")))) {
+              return fail(22, "utf8 code point");
+            }
+            if (RE2::FullMatch(absl::string_view("\xc3\xa9"), one_char)) {
+              return fail(23, "latin1 byte pair matched as one character");
+            }
+            if (!RE2::FullMatch(absl::string_view("e"), one_char)) {
+              return fail(24, "latin1 single byte");
+            }
+
+            /* Options::set_case_sensitive is a setter (re2/re2.h:724) and
+             * case_sensitive_ defaults to true (re2/re2.h:688), so the same
+             * pattern answers differently under each. */
+            RE2::Options folded;
+            folded.set_log_errors(false);
+            folded.set_case_sensitive(false);
+            RE2 insensitive("ruby", folded);
+            if (!insensitive.ok()) return fail(25, "folded pattern");
+            if (!RE2::FullMatch(absl::string_view("RUBY"), insensitive)) {
+              return fail(26, "case folded");
+            }
+            if (!RE2::FullMatch(absl::string_view("ruby"), insensitive)) {
+              return fail(27, "case folded lower");
+            }
+            if (RE2::FullMatch(absl::string_view("RUBY"),
+                               RE2(absl::string_view("ruby")))) {
+              return fail(28, "case sensitivity is not the upstream default");
+            }
+
+            std::printf("installed C++ consumer\n");
+            std::printf("  $0 \"ruby:1234\"  $1 \"ruby\"  $2 \"1234\"\n");
+            std::printf("  rewrite \\2-\\1 -> \"1234-ruby\"\n");
+            std::printf("  QuoteMeta \"a.b*c\" -> \"a\\\\.b\\\\*c\"\n");
+            return 0;
+          }
+          CPP
+
+          zig c++ -std=c++17 \
+            -Izig-out/include \
+            "$RUNNER_TEMP/cxx_consumer.cpp" \
+            -Lzig-out/lib -lre2 -labsl \
+            -o "$RUNNER_TEMP/cxx_consumer"
+          "$RUNNER_TEMP/cxx_consumer"
+
+      # The installed metadata, read back out of the file rather than assumed.
+      # `prefix=${pcfiledir}/../..` is relative on purpose -- the graph does not
+      # know where `--prefix` will point when it writes the file -- so this step
+      # is also a relocatability receipt for the static route.
+      - name: the installed re2.pc describes what was actually installed
+        run: |
+          set -euo pipefail
+          pc=zig-out/lib/pkgconfig/re2.pc
+          test -s "$pc" || { echo "missing or empty $pc" >&2; find zig-out -name '*.pc' >&2; exit 1; }
+          echo "  --- $pc"; cat "$pc"
+
+          cflags=$(PKG_CONFIG_PATH=zig-out/lib/pkgconfig pkg-config --cflags re2)
+          libs=$(PKG_CONFIG_PATH=zig-out/lib/pkgconfig pkg-config --libs re2)
+          echo "  pkg-config --cflags re2: $cflags"
+          echo "  pkg-config --libs re2:   $libs"
+
+          case "$cflags" in
+            *"-I$PWD/zig-out/include"*) ;;
+            *) echo "re2.pc does not name the installed include directory" >&2; exit 1 ;;
+          esac
+          for library in -lre2bridge -lre2 -labsl; do
+            case " $libs " in
+              *" $library "*) ;;
+              *) echo "re2.pc Libs does not carry $library" >&2; exit 1 ;;
+            esac
+          done
+          # The static route is not the ELF shared route, so the compiled C++
+          # runtime must not be in Libs.
+          case " $libs " in
+            *-lre2cpp*) echo "re2.pc Libs names libre2cpp on the static route" >&2; exit 1 ;;
+          esac
+
+          # And a consumer that binds only through pkg-config, with no -I and no
+          # -L of its own, must still compile.
+          cat > "$RUNNER_TEMP/pkgconfig_consumer.c" <<'C'
+          #include <re2_bridge.h>
+          #include <stdio.h>
+          int main(void) {
+            Re2BridgeRegex *re = NULL;
+            if (re2br_compile(NULL, "a+", 2, &re) != RE2BRIDGE_OK) return 1;
+            if (re2br_regex_group_count(re) != 0) return 2;
+            re2br_regex_destroy(re);
+            std::printf("pkg-config consumer\n");
+            return 0;
+          }
+          C
+          # -lc++ for the same reason as above: the archives are C++ objects.
+          # shellcheck disable=SC2046
+          zig cc -std=c11 $cflags "$RUNNER_TEMP/pkgconfig_consumer.c" \
+            $libs -lc++ -o "$RUNNER_TEMP/pkgconfig_consumer"
+          "$RUNNER_TEMP/pkgconfig_consumer"
+
+  # ---------------------------------------------------------------------------
+  # The shared delivery: what the graph installs, what the loader does with it,
+  # and whether any of it still works from a prefix that has been moved since the
+  # build wrote it.
+  shared-delivery:
+    name: shared delivery, installed closure and relocatability
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+
+      - name: Build and install the shared delivery
+        run: |
+          set -euo pipefail
+          zig build install -Dlinkage=dynamic -j8 --summary all \
+            --prefix "$RUNNER_TEMP/re2-shared"
+
+      # One named dynamic-capable target, which is what a `-Dtarget=...` names:
+      # exactly one target, not a narrowed matrix.
+      - name: the facade, tests and example compile for a cross target, shared
+        run: zig build check -Dtarget=aarch64-linux-gnu -Dlinkage=dynamic -j8 --summary all
+
+      # The refusal is the designed behaviour, so it is gated as one: a shared
+      # delivery for a target that cannot carry one must not succeed. `check`
+      # refuses that cell with a build failure naming the OS tag and the way
+      # out, rather than substituting a static archive under the option's name.
+      # Nothing here reads the message; the exit status is the whole assertion.
+      - name: a shared delivery for a target without a dynamic linker is refused
+        run: |
+          set -euo pipefail
+          if zig build check -Dtarget=wasm32-wasi -Dlinkage=dynamic -j8 --summary all; then
+            echo "verify.yml: -Dlinkage=dynamic for wasm32-wasi succeeded, which it must not" >&2
+            exit 1
+          fi
+          echo "  wasm32-wasi + -Dlinkage=dynamic refused, as required"
+
+      # The default delivery on that same target is the static one, and it is a
+      # fully supported delivery: the matrix row above is not a special case.
+      - name: the default delivery for wasm32-wasi is a static archive
+        run: zig build check -Dtarget=wasm32-wasi -j8 --summary all
+
+      # What the graph installed, and nothing else: no cache path, no
+      # intermediate, no artifact this job produced itself.
+      #
+      # The three sonames are upstream's or Abseil's own, not this fork's
+      # choices:
+      #   libre2.so.11        vendor/re2/CMakeLists.txt:43 sets `set(SONAME 11)`,
+      #                       applied at :151, and re2.pc.in:7 publishes it as
+      #                       `Version: @SONAME@.0.0`.
+      #   libabsl.so.2505     vendor/abseil-cpp/CMakeLists.txt:27 sets
+      #                       `set(ABSL_SOVERSION "2505.0.0")` -- 2505, because
+      #                       that is this Abseil release and NOT the 2508 some
+      #                       other SDK in this workspace pins.
+      #   libre2bridge.so.0   fork-authored; upstream has no shared bridge and so
+      #                       no upstream SOVERSION for one.
+      # This runner is ELF, so the run path is `$ORIGIN`; a Darwin install
+      # carries `@loader_path` instead and is a different machine's receipt.
+      - name: the shared objects, their sonames and their RUNPATH
+        run: |
+          set -euo pipefail
+          prefix="$RUNNER_TEMP/re2-shared"
+
+          check_lib () {
+            name=$1; real=$2; major=$3
+            if [ ! -f "$prefix/lib/$real" ]; then
+              echo "missing $prefix/lib/$real" >&2
+              ls -l "$prefix/lib" >&2 || true
+              exit 1
+            fi
+            if [ "$(readlink "$prefix/lib/lib$name.so.$major")" != "$real" ]; then
+              echo "lib$name.so.$major does not name $real" >&2
+              ls -l "$prefix/lib" >&2 || true
+              exit 1
+            fi
+            if [ "$(readlink "$prefix/lib/lib$name.so")" != "lib$name.so.$major" ]; then
+              echo "lib$name.so does not name lib$name.so.$major" >&2
+              ls -l "$prefix/lib" >&2 || true
+              exit 1
+            fi
+            soname=$(readelf -d "$prefix/lib/lib$name.so.$major" \
+              | sed -n 's/.*SONAME.*\[\(.*\)\].*/\1/p')
+            if [ "$soname" != "lib$name.so.$major" ]; then
+              echo "lib$name.so.$major records SONAME '$soname'" >&2
+              readelf -d "$prefix/lib/lib$name.so.$major" >&2
+              exit 1
+            fi
+            if ! readelf -d "$prefix/lib/lib$name.so.$major" \
+              | grep -qE '\((RUNPATH|RPATH)\).*\$ORIGIN'; then
+              echo "lib$name.so.$major has no \$ORIGIN run path" >&2
+              readelf -d "$prefix/lib/lib$name.so.$major" >&2
+              exit 1
+            fi
+            echo "  lib$name.so.$major SONAME $soname, RUNPATH \$ORIGIN"
+          }
+
+          check_lib absl "libabsl.so.2505.0.0" 2505
+          check_lib re2 "libre2.so.11.0.0" 11
+          check_lib re2bridge "libre2bridge.so.0.0.0" 0
+
+          # The transitive closure. A `libre2bridge.so.0` with no dependency on
+          # `libre2.so.11` would mean RE2 had been linked into it statically and
+          # the soname would be naming a different image; a `libre2.so.11` with no
+          # dependency on the Abseil object would mean the same one level down.
+          needed () { readelf -d "$1" | sed -n 's/.*NEEDED.*\[\(.*\)\].*/\1/p'; }
+          if ! needed "$prefix/lib/libre2bridge.so.0" | grep -qx 'libre2.so.11'; then
+            echo "libre2bridge.so.0 does not record libre2.so.11 as needed" >&2
+            needed "$prefix/lib/libre2bridge.so.0" >&2 || true
+            exit 1
+          fi
+          if ! needed "$prefix/lib/libre2.so.11" | grep -qx 'libabsl.so.2505'; then
+            echo "libre2.so.11 does not record libabsl.so.2505 as needed" >&2
+            needed "$prefix/lib/libre2.so.11" >&2 || true
+            exit 1
+          fi
+          echo "  closure: libre2bridge.so.0 -> libre2.so.11 -> libabsl.so.2505"
+
+      # The boundary between the images, stated as a fact about the symbols
+      # rather than as a claim. Every `re2br_*` symbol is defined in
+      # `zig/bridge.cc` in this repository, so a shared `libre2` that exported
+      # one would be a different library from upstream's.
+      #
+      # The C++ surface is checked by namespace rather than by one hand-written
+      # mangled name: upstream declares its types in `namespace re2`
+      # (`re2/re2.h`) and Abseil's in `namespace absl`, and the Itanium ABI
+      # prefixes a nested name with `_ZN3re2` and `_ZN4absl`. A single exact
+      # symbol would be a stronger claim than this file can support without
+      # hard-coding a signature upstream is free to change; a namespace is the
+      # fact the source states.
+      - name: the export surface is the one upstream's own shared build has
+        run: |
+          set -euo pipefail
+          prefix="$RUNNER_TEMP/re2-shared"
+          dynsyms () {
+            readelf -W --dyn-syms "$1" | awk 'NF >= 8 { print $8 }' | sed 's/@.*//' | sort -u
+          }
+
+          for symbol in re2br_compile re2br_match re2br_extract re2br_quote_meta \
+                       re2br_check_rewrite re2br_options_init re2br_regex_error \
+                       re2br_regex_group_count re2br_regex_destroy; do
+            if ! dynsyms "$prefix/lib/libre2bridge.so.0" | grep -qx "$symbol"; then
+              echo "libre2bridge.so.0 does not export $symbol" >&2
+              exit 1
+            fi
+          done
+          bridge_count=$(dynsyms "$prefix/lib/libre2bridge.so.0" | grep -c '^re2br_' || true)
+          echo "  libre2bridge.so.0 exports $bridge_count re2br_* entry points"
+
+          if dynsyms "$prefix/lib/libre2.so.11" | grep -q '^re2br_'; then
+            echo "libre2.so.11 exports re2br_* symbols; an upstream libre2 has none" >&2
+            exit 1
+          fi
+          if ! dynsyms "$prefix/lib/libre2.so.11" | grep -q '^_ZN3re2'; then
+            echo "libre2.so.11 exports nothing in namespace re2" >&2
+            exit 1
+          fi
+          if ! dynsyms "$prefix/lib/libabsl.so.2505" | grep -q '^_ZN4absl'; then
+            echo "libabsl.so.2505 exports nothing in namespace absl" >&2
+            exit 1
+          fi
+          if dynsyms "$prefix/lib/libabsl.so.2505" | grep -q '^_ZN3re2'; then
+            echo "libabsl.so.2505 exports re2 symbols; Abseil has no such namespace" >&2
+            exit 1
+          fi
+          echo "  libre2.so.11 exports namespace re2 and no C entry point; libabsl.so.2505 exports namespace absl and nothing from re2"
+
+      # On this route the delivery also carries a fourth object, `libre2cpp`,
+      # compiled from the pinned compiler's own libc++, libc++abi and libunwind
+      # sources: Zig's ordinary static C++ runtime hides its exports, so two
+      # images that each carry it cannot share one locale facet registry. Its
+      # presence, and the three licence texts that cover it, are gated here
+      # rather than described -- a shared ELF delivery that shipped the object
+      # without the terms would be an artifact nothing can lawfully load.
+      - name: the shared ELF delivery carries its compiled C++ runtime and its terms
+        run: |
+          set -euo pipefail
+          prefix="$RUNNER_TEMP/re2-shared"
+          for candidate in "$prefix/lib/libre2cpp.so" "$prefix"/lib/libre2cpp.so.*; do
+            if [ ! -e "$candidate" ]; then
+              echo "the shared ELF delivery installed no libre2cpp ($candidate absent)" >&2
+              ls -l "$prefix/lib" >&2 || true
+              exit 1
+            fi
+          done
+          real=$(readlink "$prefix/lib/libre2cpp.so.0")
+          echo "  libre2cpp.so.0 -> $real"
+          if [ ! -f "$prefix/lib/$real" ]; then
+            echo "libre2cpp.so.0 does not resolve to an installed file" >&2
+            exit 1
+          fi
+          for runtime in libcxx libcxxabi libunwind; do
+            licence="$prefix/share/licenses/re2/LICENSE.$runtime.txt"
+            if [ ! -s "$licence" ]; then
+              echo "the shared ELF delivery has libre2cpp but no $licence" >&2
+              ls -l "$prefix/share/licenses/re2" >&2 || true
+              exit 1
+            fi
+          done
+          echo "  libre2cpp and its three LLVM licence texts are present"
+          # And pkg-config must name it on exactly this route.
+          libs=$(PKG_CONFIG_PATH="$prefix/lib/pkgconfig" pkg-config --libs re2)
+          echo "  pkg-config --libs re2: $libs"
+          case " $libs " in
+            *-lre2cpp*) echo "  re2.pc Libs does not name libre2cpp on the ELF shared route" >&2; exit 1 ;;
+          esac
+
+      # A relocated install is a package a C consumer can use. The prefix is
+      # MOVED after the build wrote it, and the consumer is compiled into the
+      # moved tree, so anything that recorded an absolute build-time path fails
+      # here. Two things are under test and they are different:
+      #
+      #   * the consumer executable finds its own direct dependency through the
+      #     `$ORIGIN/../lib` run path given to it at link time below;
+      #   * the TRANSITIVE dependency -- libre2.so.11 as NEEDED by
+      #     libre2bridge.so.0 -- is found through libre2bridge's OWN `$ORIGIN`
+      #     run path, because DT_RUNPATH is not transitive: it applies to the
+      #     object's direct NEEDED entries and to nothing else. If that run path
+      #     were missing, the loader would look for libre2.so.11 in the
+      #     consumer's search path only, and this step would fail.
+      #
+      # The consumer is bound through the installed pkg-config metadata rather
+      # than through hand-written -L, so `prefix=${pcfiledir}/../..` is what is
+      # actually exercised. No environment variable points at the libraries:
+      # LD_LIBRARY_PATH is not set and not unset, and relying on this runner
+      # having none is not part of the test.
+      - name: a relocated install is a package a C consumer can use
+        run: |
+          set -euo pipefail
+          relocated="$RUNNER_TEMP/relocated"
+          cp -R "$RUNNER_TEMP/re2-shared" "$relocated"
+          mkdir -p "$relocated/bin"
+
+          cat > "$relocated/bin/shared_c_consumer.c" <<'C'
+          /* The installed C bridge, from a prefix that has been moved since the
+           * build wrote it, with no environment variable pointing at it. */
+          #include <re2_bridge.h>
+
+          #include <stdio.h>
+          #include <string.h>
+
+          int main(void) {
+            static const char kSubject[] = "ruby:1234";
+            Re2BridgeRegex *regex = NULL;
+            Re2BridgeSpan spans[3];
+            size_t span_count = 0;
+
+            if (re2br_compile(NULL, "(\\w+)(?::(\\d+))?", 15, &regex) != RE2BRIDGE_OK) {
+              return 1;
+            }
+            if (re2br_regex_group_count(regex) != 2) return 2;
+            if (re2br_match(regex, RE2BRIDGE_UNANCHORED,
+                             kSubject, sizeof kSubject - 1,
+                             0, sizeof kSubject - 1, spans, 3,
+                             &span_count) != RE2BRIDGE_OK) return 3;
+            if (span_count != 3) return 4;
+            if (spans[0].start != 0 || spans[0].end != 9) return 5;
+            if (spans[2].start != 5 || spans[2].end != 9) return 6;
+
+            {
+              char out[64];
+              size_t out_len = 0;
+              if (re2br_extract(regex, RE2BRIDGE_UNANCHORED,
+                                kSubject, sizeof kSubject - 1,
+                                0, sizeof kSubject - 1,
+                                "\\2-\\1", 5, out, sizeof out,
+                                &out_len) != RE2BRIDGE_OK) return 7;
+              if (out_len != 9 || memcmp(out, "1234-ruby", 9) != 0) return 8;
+            }
+
+            re2br_regex_destroy(regex);
+            std::printf("shared installed C consumer\n");
+            std::printf("  relocated prefix, resolved through the installed re2.pc\n");
+            std::printf("  $0 [0,9), $2 [5,9), rewrite \\2-\\1 -> \"1234-ruby\"\n");
+            return 0;
+          }
+          C
+
+          cflags=$(PKG_CONFIG_PATH="$relocated/lib/pkgconfig" pkg-config --cflags re2)
+          libs=$(PKG_CONFIG_PATH="$relocated/lib/pkgconfig" pkg-config --libs re2)
+          echo "  pkg-config --cflags re2: $cflags"
+          echo "  pkg-config --libs re2:   $libs"
+          case "$cflags" in
+            *"-I$relocated/include"*) ;;
+            *) echo "the relocated re2.pc does not name $relocated/include" >&2; exit 1 ;;
+          esac
+
+          # shellcheck disable=SC2046
+          zig cc -std=c11 $cflags \
+            "$relocated/bin/shared_c_consumer.c" \
+            $libs -Wl,-rpath,'$ORIGIN/../lib' \
+            -o "$relocated/bin/shared_c_consumer"
+          "$relocated/bin/shared_c_consumer"
+
+  # ---------------------------------------------------------------------------
+  cross:
+    name: check ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - x86_64-linux-gnu
+          - aarch64-linux-gnu
+          - aarch64-macos-none
+          - x86_64-windows-gnu
+          - riscv64-linux-gnu
+          - wasm32-wasi
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+
+      # Compiled, never executed: no cross-arch emulator is assumed here, and
+      # `zig build check` runs nothing by construction.
+      #
+      # One step, one target. All six are attempted without `continue-on-error`,
+      # so a failure stays a failure and does not cancel a sibling target --
+      # `fail-fast: false` above is what stops one target's failure from hiding
+      # the state of the other five.
+      #
+      # If a target genuinely cannot build, record the compiler output in
+      # FORK-NOTES.md and name the boundary in the step that fails. Do not mark
+      # it green, and do not drop the row.
+      - name: zig build check -Dtarget=${{ matrix.target }}
+        run: zig build check -Dtarget=${{ matrix.target }} -j8 --summary all

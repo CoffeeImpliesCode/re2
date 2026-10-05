@@ -1,0 +1,96 @@
+# .gitignore — this fork's own ignore rules.
+#
+# Two rules are not optional and neither may be dropped: `zig build` writes the
+# local cache beside the package (`.zig-cache/`) and the installed prefix under
+# `zig-out/`, and neither belongs in the repository or in the package manifest's
+# `paths`. Both patterns are unanchored, so they also cover the standalone
+# consumer package's own `consumer/zig-out/`.
+.zig-cache/
+zig-out/
+
+# ---------------------------------------------------------------------------
+# Upstream ignore conventions, mirrored here so a developer who runs upstream's
+# own tooling at this package root does not dirty the checkout.
+#
+# These are NOT replacements for the vendored ignore files:
+# `vendor/re2/.gitignore` and `vendor/abseil-cpp/.gitignore` are upstream bytes,
+# they are recorded in UPSTREAM.sha256 group F, and git honours them at their
+# own directory levels. Nothing below removes or weakens either of them; every
+# one of RE2's six patterns and every one of Abseil's nine is repeated here, so
+# both levels say the same thing. A pattern that is kept only while it matches
+# nothing is a pattern the next person greps for, finds empty, and deletes.
+#
+# RE2's rules, from vendor/re2/.gitignore: five of the six (`*.pyc`, `*.orig`,
+# `core`, `obj/`, `user.bazelrc`) match no path in this tree today, and the
+# sixth is `benchlog.*`, which is dealt with separately below.
+*.pyc
+*.orig
+core
+obj/
+user.bazelrc
+
+# Abseil's rules, from vendor/abseil-cpp/.gitignore: all nine, with `*.pyc`
+# shared with RE2's set above and listed once. `/bazel-*`,
+# `--verbose_explanations` and `copts/__pycache__/` are anchored or specific
+# upstream and are repeated here unanchored on purpose: at the package root,
+# where a developer may run Bazel, that is the directory the rule is about.
+bazel-*
+MODULE.bazel.lock
+--verbose_explanations
+build/
+*.swp
+CMakeLists.txt.user
+.vscode/
+copts/__pycache__/
+
+# RE2's `benchlog.*` is for the benchmark log a `make bench` run writes into an
+# upstream checkout. vendor/re2/benchlog/** is a different thing entirely:
+# upstream's own COMMITTED benchmark corpus, six files, four of which are named
+# benchlog.*. This rule is kept because it is upstream's, and the four files are
+# re-included at the bottom of this file -- but those two things do not compose
+# on their own, and the block at the bottom says exactly what does and does not
+# work.
+benchlog.*
+
+# ---------------------------------------------------------------------------
+# Re-including vendored material that an upstream rule would swallow.
+#
+# Four paths are at risk, and this is the whole hazard:
+#
+#   vendor/re2/benchlog/benchlog.c2
+#   vendor/re2/benchlog/benchlog.mini
+#   vendor/re2/benchlog/benchlog.r70
+#   vendor/re2/benchlog/benchlog.wreck
+#
+# They are upstream bytes, group F of UPSTREAM.sha256 records them, and
+# `package.nix`'s source allow-list names them through `./vendor`. Dropped from
+# a commit, the tree then fails its own integrity check on a correctly fetched
+# copy: the manifest records a path the checkout does not have, and
+# tools/check-provenance.sh's file-set comparison is exactly what sees it.
+#
+# The two negations below are correct in intent and are what a tool that reads
+# only this file sees. They do not on their own re-include the four files, and
+# this comment says so rather than leaving a reader to discover it:
+#
+#   1. Precedence. Patterns from a lower-level file override those from
+#      higher-level files, so `vendor/re2/.gitignore`'s `benchlog.*` outranks
+#      whatever this file says. That vendored file is upstream bytes and the tree
+#      is pristine, so it cannot be edited to make room, and a negation here
+#      cannot outrank it.
+#   2. The second negation is inert for a second reason as well: `**` walks into
+#      directories, and `vendor/re2/benchlog` was never excluded in the first
+#      place, because `benchlog.*` needs a dot and does not match the bare name
+#      `benchlog`. There is no excluded directory to descend past, which is also
+#      why the risk is four files and not a whole subtree.
+#
+# What actually works is one force-add, once:
+#
+#     git add -f vendor/re2/benchlog
+#
+# the directory, which pulls the four files in -- not four separate paths. After
+# that they are tracked, and .gitignore does not apply to tracked paths at all,
+# so this is a one-time action rather than something to repeat at every commit.
+# Until it happens, those four files are the one part of this repository that a
+# plain `git add .` silently drops.
+!vendor/re2/benchlog/
+!vendor/re2/benchlog/**

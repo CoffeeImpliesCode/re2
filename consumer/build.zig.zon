@@ -1,0 +1,30 @@
+// SPDX-License-Identifier: BSD-3-Clause
+// Copyright (c) 2026 the contributors to this fork.
+.{
+    // The package id. A different package from the library, so it carries its
+    // own name and its own fingerprint, which is what makes this a real
+    // consumer rather than a second module of the library.
+    .name = .re2_consumer,
+    .version = "0.1.0",
+    // This manifest's own value, and this manifest's alone. It belongs here and
+    // nowhere else: it identifies *this* package's name-and-version pair to
+    // Zig's package manager, and the library's `build.zig.zon` has a different
+    // name and therefore a different fingerprint. Copying the library's value
+    // here would be the one way to make this file wrong.
+    .fingerprint = 0x46b3d79298c18e0d, // Changing this has security and trust implications.
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{
+        // A relative path, not a registry or archive URL. The consumer is the
+        // proof that `dep.module("re2")` works from outside the package that
+        // defines it; resolving that through the network would make the proof
+        // depend on a published state of the world instead of on this tree.
+        .re2 = .{ .path = ".." },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        // .zig-cache/ and zig-out/ are deliberately absent: build outputs are
+        // not part of a package.
+    },
+}
