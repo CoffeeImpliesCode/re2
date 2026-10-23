@@ -1,7 +1,7 @@
 .{
     .name = .re2,
     .version = "2025.11.5",
-    .minimum_zig_version = "0.16.0",
+    .minimum_zig_version = "0.17.0",
 
     .fingerprint = 0x7869ab4e81980085,
 

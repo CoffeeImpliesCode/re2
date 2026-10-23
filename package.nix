@@ -9,7 +9,7 @@
 
 assert linkage == "static" || linkage == "dynamic";
 
-assert zig.version == "0.16.0";
+assert zig.version == "0.17.0";
 
 # The build runner targets the Nix build host, so Nix cross builds are refused.
 # Native builds on remote builders remain valid.
@@ -210,7 +210,7 @@ stdenv.mkDerivation {
       header, relocatable pkg-config metadata and every licence text the output
       carries.${if cppRuntime then ''
         On an ELF platform the shared delivery's fourth library is
-        libre2cpp.so.0, compiled from the pinned Zig 0.16.0 compiler's own
+        libre2cpp.so.0, compiled from the pinned Zig 0.17.0 compiler's own
         libc++, libc++abi and libunwind sources: Zig's ordinary static C++
         runtime hides its exports, so two images that each carry it cannot
         share one locale facet registry. It is built at the compiler's own

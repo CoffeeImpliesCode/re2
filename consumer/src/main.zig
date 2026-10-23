@@ -364,7 +364,7 @@ fn caseInvalidPattern(w: *std.Io.Writer) !void {
 
     // `compileInto` adds no terminator; zero-fill and scan for the first NUL.
     // 512 bytes holds this error text: RE2's code, separator, and pattern.
-    var message = [_]u8{0} ** 512;
+    var message: [512]u8 = @splat(0);
 
     // On unexpected success, move the handle to a mutable local for `deinit`.
     if (re2.Regex.compileInto(pattern, .{ .log_errors = .off }, &message)) |accepted| {

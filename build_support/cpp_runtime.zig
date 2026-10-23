@@ -22,17 +22,14 @@
 //!
 //! Sources and configuration
 //! -------------------------
-//! Every path below, every `-D` below and the choice to compile libunwind's
-//! complete source list rather than link the compiler's archive all come from
-//! the pinned compiler's own `src/libs/libcxx.zig` at
-//! 24fdd5b7a4c1c8b5deb5b56756b9dbc8e08c86a8 (Zig 0.16.0), which is where
-//! Zig describes how it builds libc++, libc++abi and libunwind for every
-//! target.  That build definition is the compiler's source and is not shipped
-//! under `lib/`, so the list is transcribed from the s2geometry fork's
-//! `build_support/cpp_runtime.zig`, which transcribed it from the same file
-//! for the same compiler: this is the same pinned toolchain, so the same
-//! shipped sources, and the provenance note above is kept rather than dropped
-//! because a name changed from `s2cpp` to `re2cpp`.
+//! Every source path, compiler flag and source selection below follows the
+//! compiler's build definition for libc++, libc++abi and libunwind. The
+//! original transcription came from `src/libs/libcxx.zig` at
+//! 24fdd5b7a4c1c8b5deb5b56756b9dbc8e08c86a8 (Zig 0.16.0), via the
+//! s2geometry fork's `build_support/cpp_runtime.zig`. The source lists are
+//! reconciled against Zig 0.17.0: its libc++abi list adds
+//! `src/cxa_noexception.cpp`. The current compiler build definition remains
+//! the authority for these source sets, flags and per-target configuration.
 //!
 //! What is *not* re-derived here, and why that is honest: the file list, the
 //! macro set and the libunwind source list are the compiler's, not this
@@ -76,7 +73,7 @@ pub fn configureHeaders(b: *std.Build, module: *std.Build.Module, target: std.Bu
     // (`build_support/platform_flags.zig`, "musl").
     module.addCMacro("_LIBCPP_HAS_MUSL_LIBC", if (target.result.abi.isMusl()) "1" else "0");
     module.addCMacro("_LIBCPP_HAS_VENDOR_AVAILABILITY_ANNOTATIONS", "0");
-    // compilerRtOptMode uses ReleaseFast for normal Debug/ReleaseSafe builds.
+    // This runtime uses fast optimization for debug and safe builds.
     module.addCMacro("_LIBCPP_HARDENING_MODE", "_LIBCPP_HARDENING_MODE_NONE");
     for ([_][]const u8{
         "_LIBCPP_HAS_MONOTONIC_CLOCK",
@@ -100,7 +97,7 @@ pub fn configureHeaders(b: *std.Build, module: *std.Build.Module, target: std.Bu
 
 /// Compiles the pinned compiler's complete threaded ELF C++ runtime as one DSO.
 ///
-/// The version carried by the object is the build compiler's 0.16.0, not this
+/// The version carried by the object is the build compiler's 0.17.0, not this
 /// package's upstream release version: the object *is* the compiler's
 /// libc++/libc++abi/libunwind, so a consumer pins its soname exactly as it
 /// does for the other three artifacts.  Kept in step with
@@ -110,7 +107,7 @@ pub fn add(b: *std.Build, target: std.Build.ResolvedTarget) *std.Build.Step.Comp
     std.debug.assert(target.result.ofmt == .elf);
     const module = b.createModule(.{
         .target = target,
-        .optimize = .ReleaseFast,
+        .optimize = .fast,
         .link_libc = true,
         .link_libcpp = false,
         .pic = true,
@@ -195,7 +192,7 @@ pub fn add(b: *std.Build, target: std.Build.ResolvedTarget) *std.Build.Step.Comp
     return b.addLibrary(.{
         .name = "re2cpp",
         .linkage = .dynamic,
-        .version = .{ .major = 0, .minor = 16, .patch = 0 },
+        .version = .{ .major = 0, .minor = 17, .patch = 0 },
         .root_module = module,
     });
 }
@@ -219,13 +216,12 @@ pub fn installLicences(b: *std.Build) void {
 
 /// A path inside the pinned compiler's own shipped source tree.
 ///
-/// `b.graph.zig_lib_directory` is the same value `Step.Compile` forwards for
-/// every compilation this build makes
-/// (`lib/std/Build/Step/Compile.zig:1658-1667`), so these sources are the ones
-/// beside the `std` this build compiled the rest of itself against, not
-/// whatever happens to be on `PATH`.
+/// `std.Build.LazyPath.zig_lib` resolves against the compiler library directory
+/// used by this build. These source paths therefore share the `std` library
+/// used to compile this graph instead of following `PATH`.
 fn compilerPath(b: *std.Build, parts: []const []const u8) std.Build.LazyPath {
-    return .{ .cwd_relative = b.graph.zig_lib_directory.join(b.allocator, parts) catch @panic("OOM") };
+    const sub_path = std.fs.path.join(b.allocator, parts) catch @panic("OOM");
+    return std.Build.LazyPath.zig_lib.path(b, sub_path);
 }
 
 const flags = [_][]const u8{
@@ -240,7 +236,7 @@ const flags = [_][]const u8{
     "-Wno-suggest-override",
 };
 
-// Zig 0.16 src/libs/libcxx.zig, base plus threaded sources. The compiler
+// Zig 0.17 src/libs/libcxx.zig, base plus threaded sources. The compiler
 // excludes filesystem/int128_builtins.cpp because compiler-rt provides it,
 // and selects the serial PSTL backend rather than libdispatch. This is the
 // compiler's own source list for the compiler this package is built with; it
@@ -330,5 +326,6 @@ const libcxxabi_files = [_][]const u8{
     "src/private_typeinfo.cpp",
     "src/cxa_exception.cpp",
     "src/cxa_personality.cpp",
+    "src/cxa_noexception.cpp",
     "src/cxa_thread_atexit.cpp",
 };

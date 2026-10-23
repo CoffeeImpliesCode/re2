@@ -528,7 +528,7 @@ test "the_bridge_leaves_a_callers_spans_alone_when_the_engine_declines" {
     const c = re2.c;
 
     // Zero preserves bridge defaults; set UTF-8 explicitly for its enum value.
-    var options: c.Re2BridgeOptions = .{ .encoding = @intFromEnum(re2.Encoding.utf8) };
+    var options: c.Re2BridgeOptions = .{ .encoding = @backingInt(re2.Encoding.utf8) };
 
     const pattern = "chrisr:9000";
     var handle: ?*c.Re2BridgeRegex = null;
@@ -545,7 +545,7 @@ test "the_bridge_leaves_a_callers_spans_alone_when_the_engine_declines" {
     const subject = fixtures.host_port_subject;
     const first = c.re2br_match(
         regex,
-        @intFromEnum(re2.Anchor.unanchored),
+        @backingInt(re2.Anchor.unanchored),
         subject.ptr,
         subject.len,
         0,
@@ -562,7 +562,7 @@ test "the_bridge_leaves_a_callers_spans_alone_when_the_engine_declines" {
     // A no-match leaves this caller-owned span array unchanged.
     const second = c.re2br_match(
         regex,
-        @intFromEnum(re2.Anchor.unanchored),
+        @backingInt(re2.Anchor.unanchored),
         fixtures.no_host_subject.ptr,
         fixtures.no_host_subject.len,
         0,

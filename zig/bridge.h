@@ -9,9 +9,9 @@
  * package publishes, come from the compiled upstream C++17 in
  * `vendor/re2/re2` and `vendor/re2/util`, reached through `zig/bridge.cc`.
  *
- * Why a bridge at all: `addTranslateC` translates C, and the upstream library
+ * Why a bridge at all: the upstream library
  * is C++17 with a class, `std::string`, `absl::string_view` and name-mangled
- * linkage.  Translating a C++ header is not something Zig 0.16 does, so the C
+ * linkage.  `addTranslateC` translates C headers, not C++ headers, so the C
  * surface a Zig caller needs is written once, here, as a header the translator
  * can read and a translation unit the compiler can compile.  This header is
  * therefore plain C99 with `extern "C"` guards: it must stay parseable by a C
@@ -41,7 +41,7 @@
  *  * Validation.  Arguments are checked here, before the upstream call, with
  *    ordinary comparisons, and a rejected argument is
  *    `RE2BRIDGE_INVALID_ARGUMENT`.  Nothing is `assert`ed: an `assert` is
- *    removed in ReleaseFast, so a bound check that vanishes is a bound check
+ *    removed in fast optimization mode, so a bound check that vanishes is a bound check
  *    that lies.  This is not decoration -- see `re2br_match` below, where
  *    upstream itself folds a bad offset pair into "no match" and a caller that
  *    only forwarded the call could never tell the two apart.

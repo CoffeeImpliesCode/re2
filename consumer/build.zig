@@ -32,6 +32,6 @@ pub fn build(b: *std.Build) void {
 
     // Forward arguments so runtime builds can receive `--provider <path>`.
     const run_exe = b.addRunArtifact(exe);
-    if (b.args) |args| run_exe.addArgs(args);
+    run_exe.addPassthruArgs();
     b.step("run", "Build and run the consumer program").dependOn(&run_exe.step);
 }

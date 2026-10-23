@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BSD-3-Clause AND Apache-2.0
 //
-//! Zig 0.16 build for the RE2 fork.
+//! Zig 0.17 build for the RE2 fork.
 const std = @import("std");
 
 /// Helpers for linked and runtime-loaded facade builds.
@@ -33,7 +33,7 @@ const absl_abi_version: std.SemanticVersion = .{ .major = 2505, .minor = 0, .pat
 const bridge_abi_version: std.SemanticVersion = .{ .major = 0, .minor = 0, .patch = 0 };
 
 /// The shared C++ runtime version follows the pinned compiler.
-const cpp_runtime_version: std.SemanticVersion = .{ .major = 0, .minor = 16, .patch = 0 };
+const cpp_runtime_version: std.SemanticVersion = .{ .major = 0, .minor = 17, .patch = 0 };
 
 /// Default target matrix for `check`.
 const check_targets = [_]std.Target.Query{
@@ -138,7 +138,7 @@ pub fn build(b: *std.Build) void {
 
     const run_smoke = b.addRunArtifact(smoke_exe);
     run_smoke.has_side_effects = true;
-    if (b.args) |args| run_smoke.addArgs(args);
+    run_smoke.addPassthruArgs();
     b.step("smoke", "Run the deterministic RE2 smoke program").dependOn(&run_smoke.step);
 
     // Always use the build runner for execution; it selects available
@@ -195,7 +195,7 @@ pub fn build(b: *std.Build) void {
 fn addGraph(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
+    optimize: std.lang.Optimize,
     linkage: std.builtin.LinkMode,
     runtime_loaded: bool,
     public: bool,
@@ -260,7 +260,7 @@ fn addGraph(
 fn addNativeGraph(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
+    optimize: std.lang.Optimize,
     linkage: std.builtin.LinkMode,
     cache_paths: bool,
 ) NativeGraph {
@@ -295,7 +295,7 @@ fn configureSharedCpp(
 fn addAbseil(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
+    optimize: std.lang.Optimize,
     cpp_lib: ?*std.Build.Step.Compile,
     linkage: std.builtin.LinkMode,
     cache_paths: bool,
@@ -338,7 +338,7 @@ fn addAbseil(
 fn addRE2(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
+    optimize: std.lang.Optimize,
     absl_lib: *std.Build.Step.Compile,
     cpp_lib: ?*std.Build.Step.Compile,
     linkage: std.builtin.LinkMode,
@@ -378,7 +378,7 @@ fn addRE2(
 fn addBridge(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
+    optimize: std.lang.Optimize,
     re2_lib: *std.Build.Step.Compile,
     cpp_lib: ?*std.Build.Step.Compile,
     linkage: std.builtin.LinkMode,
@@ -432,7 +432,7 @@ fn addBridge(
 fn addTests(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
+    optimize: std.lang.Optimize,
     module: *std.Build.Module,
     comptime name: []const u8,
 ) *std.Build.Step.Compile {
@@ -460,7 +460,7 @@ fn addTests(
 fn addSmoke(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
+    optimize: std.lang.Optimize,
     module: *std.Build.Module,
 ) *std.Build.Step.Compile {
     const exe_module = b.createModule(.{
@@ -479,7 +479,7 @@ fn addCheck(
     b: *std.Build,
     step: *std.Build.Step,
     target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
+    optimize: std.lang.Optimize,
     linkage: std.builtin.LinkMode,
     runtime_loaded: bool,
 ) void {
@@ -496,12 +496,12 @@ fn addCheck(
     step.dependOn(&addSmoke(b, target, optimize, built.module).step);
 }
 
-/// Forwards this build's toolchain, options, caches and prefix to the consumer.
-/// Run the consumer only when the build runner can execute its target.
+/// Rebuilds the consumer with the selected target, toolchain, and caches.
+/// Cross targets are installed; native targets are also run.
 fn addConsumerStep(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
+    optimize: std.lang.Optimize,
     linkage: ?std.builtin.LinkMode,
     runtime_loaded: ?bool,
 ) void {
@@ -511,10 +511,22 @@ fn addConsumerStep(
     const cpu = query.serializeCpuAlloc(b.allocator) catch @panic("OOM");
     defer b.allocator.free(cpu);
 
-    // Use the compiler that is running this build for the nested build.
-    const run = b.addSystemCommand(&.{ b.graph.zig_exe, "build" });
+    const launcher = b.addExecutable(.{
+        .name = "re2-consumer-build",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/consumer.zig"),
+            .target = b.graph.host,
+            .optimize = .debug,
+        }),
+    });
+    const run = b.addRunArtifact(launcher);
     run.setName("consumer package");
     run.setCwd(b.path("consumer"));
+    // Resolve toolchain and cache paths before setting the child environment.
+    run.addDirectoryArg2(std.Build.LazyPath.zig_lib, .{ .make_absolute = true });
+    run.addDirectoryArg2(.{ .relative = .{ .base = .global_cache } }, .{ .make_absolute = true });
+    run.addFileArg2(std.Build.LazyPath.zig_exe, .{ .make_absolute = true });
+    run.addArg("build");
     run.addArg(if (hostCanExecute(b, target)) "run" else "install");
     run.addArg(b.fmt("-Dtarget={s}", .{triple}));
     run.addArg(b.fmt("-Dcpu={s}", .{cpu}));
@@ -525,69 +537,33 @@ fn addConsumerStep(
     if (runtime_loaded) |loaded| {
         run.addArg(b.fmt("-Druntime={s}", .{if (loaded) "true" else "false"}));
     }
-    // Do not split float-ABI or dynamic-linker options from the dependency.
-    // Pass the selected standard library and executor settings to the child.
-    if (b.graph.zig_lib_directory.path) |lib_dir| {
-        run.addArgs(&.{ "--zig-lib-dir", lib_dir });
-    }
-    // Reuse the executor switches and runtime directories selected here.
-    if (b.enable_darling) run.addArg("-fdarling");
-    if (b.enable_qemu) run.addArg("-fqemu");
-    if (b.enable_rosetta) run.addArg("-frosetta");
-    if (b.enable_wasmtime) run.addArg("-fwasmtime");
-    if (b.enable_wine) run.addArg("-fwine");
-    if (b.libc_runtimes_dir) |runtimes| run.addArgs(&.{ "--libc-runtimes", runtimes });
     run.addArg("-j8");
     run.addArgs(&.{ "--summary", "all" });
     // Isolate local manifests and reuse the caller's shared global cache.
-    if (b.cache_root.path) |cache| {
-        run.addArgs(&.{ "--cache-dir", b.fmt("{s}/consumer", .{cache}) });
-    }
-    if (b.graph.global_cache_root.path) |global_cache| {
-        run.addArgs(&.{ "--global-cache-dir", global_cache });
-    }
-    // Forward a non-default install prefix as an absolute path.
-    const default_prefix = b.build_root.join(b.allocator, &.{"zig-out"}) catch @panic("OOM");
-    if (!std.mem.eql(u8, b.install_prefix, default_prefix)) {
-        const prefix = if (std.fs.path.isAbsolute(b.install_prefix))
-            b.install_prefix
-        else
-            b.pathJoin(&.{ b.graph.cache.cwd, b.install_prefix });
-        run.addArg("--prefix");
-        run.addArg(prefix);
-    }
+    const consumer_cache = std.Build.LazyPath.cache_root.path(b, "consumer");
+    run.addArg("--cache-dir");
+    run.addDirectoryArg2(consumer_cache, .{ .make_absolute = true });
     // Keep caller arguments after `--` for the nested build's run step.
-    if (b.args) |args| {
-        run.addArg("--");
-        run.addArgs(args);
-    }
+    run.addArg("--");
+    run.addPassthruArgs();
     run.has_side_effects = true;
     b.step(
         "consumer",
-        "Build the consumer/ package, and run it when this host can execute the selected target",
+        "Build the consumer/ package, and run it only for directly native targets",
     ).dependOn(&run.step);
 }
 
-/// Mirrors the build runner's executor selection for the nested consumer.
-/// GNU libc under QEMU requires the configured libc runtime directory.
+/// Whether the host can run the target without an optional emulator.
 fn hostCanExecute(b: *std.Build, target: std.Build.ResolvedTarget) bool {
     const host = &b.graph.host.result;
-    const candidate = &target.result;
-    const options: std.zig.system.GetExternalExecutorOptions = .{
-        .allow_darling = b.enable_darling,
-        .allow_qemu = b.enable_qemu,
-        .allow_wasmtime = b.enable_wasmtime,
-        .allow_wine = b.enable_wine,
-        // Match the build runner's cross-libc requirement for GNU targets.
-        .qemu_fixes_dl = candidate.isGnuLibC() and b.libc_runtimes_dir != null,
+    return switch (std.zig.system.getExternalExecutor(b.graph.io, &target.result, .{
+        .host_cpu_arch = host.cpu.arch,
+        .host_os_tag = host.os.tag,
+        .link_mode = .dynamic,
         .link_libc = true,
-    };
-    return switch (std.zig.system.getExternalExecutor(b.graph.io, host, candidate, options)) {
-        .native, .rosetta => true,
-        .wine, .wasmtime, .darling => true,
-        // GNU libc targets under QEMU need `--libc-runtimes`.
-        .qemu => !(candidate.isGnuLibC() and b.libc_runtimes_dir == null),
-        .bad_dl, .bad_os_or_cpu => false,
+    })) {
+        .native => true,
+        else => false,
     };
 }
 

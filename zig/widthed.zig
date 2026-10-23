@@ -94,7 +94,7 @@ pub fn Width(comptime code_unit: type) type {
 
             /// Upstream's `Re2BridgeFlag` ordinal for this choice.
             pub fn toC(self: Flag) u8 {
-                return @intFromEnum(self);
+                return @backingInt(self);
             }
         };
 
@@ -145,7 +145,7 @@ pub fn Width(comptime code_unit: type) type {
         fn toCOptions(options: Options) c.Re2BridgeOptions {
             return .{
                 .max_mem = options.max_mem,
-                .encoding = @intFromEnum(options.encoding),
+                .encoding = @backingInt(options.encoding),
                 .posix_syntax = options.posix_syntax.toC(),
                 .longest_match = options.longest_match.toC(),
                 .log_errors = options.log_errors.toC(),
@@ -281,7 +281,7 @@ pub fn Width(comptime code_unit: type) type {
                 var needed: usize = 0;
                 const size_status = c.re2br_match(
                     self.handle,
-                    @intFromEnum(search.anchor),
+                    @backingInt(search.anchor),
                     textPtr(subject),
                     subject.len,
                     search.start,
@@ -297,7 +297,7 @@ pub fn Width(comptime code_unit: type) type {
 
                 const status = c.re2br_match(
                     self.handle,
-                    @intFromEnum(search.anchor),
+                    @backingInt(search.anchor),
                     textPtr(subject),
                     subject.len,
                     search.start,
@@ -332,7 +332,7 @@ pub fn Width(comptime code_unit: type) type {
                 var needed: usize = 0;
                 const size_status = c.re2br_extract(
                     self.handle,
-                    @intFromEnum(search.anchor),
+                    @backingInt(search.anchor),
                     textPtr(subject),
                     subject.len,
                     search.start,
@@ -351,7 +351,7 @@ pub fn Width(comptime code_unit: type) type {
 
                 const status = c.re2br_extract(
                     self.handle,
-                    @intFromEnum(search.anchor),
+                    @backingInt(search.anchor),
                     textPtr(subject),
                     subject.len,
                     search.start,

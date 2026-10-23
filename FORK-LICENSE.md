@@ -43,7 +43,7 @@ Every file upstream did not ship:
 * **Upstream records**, reproduced verbatim:
   `vendor/re2/LICENSE`, `vendor/abseil-cpp/LICENSE` and
   `vendor/abseil-cpp/AUTHORS`.
-* **Compiler.** Zig 0.16.0 is not redistributed; the graph uses the machine's
+* **Compiler.** Zig 0.17.0 is not redistributed; the graph uses the machine's
   unmodified compiler.
 * **Platform runtimes.** Toolchain-supplied C and C++ runtimes are linked, not
   redistributed, and keep their own terms.

@@ -12,7 +12,7 @@
     // name and therefore a different fingerprint. Copying the library's value
     // here would be the one way to make this file wrong.
     .fingerprint = 0x46b3d79298c18e0d, // Changing this has security and trust implications.
-    .minimum_zig_version = "0.16.0",
+    .minimum_zig_version = "0.17.0",
     .dependencies = .{
         // A relative path, not a registry or archive URL. The consumer is the
         // proof that `dep.module("re2")` works from outside the package that

@@ -1,6 +1,6 @@
 # RE2 for Zig
 
-This package builds Google RE2 release `2025-11-05` as native libraries and exposes a typed Zig facade through a fork-authored C bridge. It requires Zig 0.16.0; RE2 and its Abseil C++ dependency are vendored under `vendor/`.
+This package builds Google RE2 release `2025-11-05` as native libraries and exposes a typed Zig facade through a fork-authored C bridge. It requires Zig 0.17.0; RE2 and its Abseil C++ dependency are vendored under `vendor/`.
 
 ## Source deviations
 
@@ -19,16 +19,13 @@ No file under `vendor/re2` or `vendor/abseil-cpp` is modified, patched, or delet
 
 Static linkage is the default. Dynamic linkage builds shared libraries. The runtime-loading option changes how the Zig facade reaches the bridge; it is independent of linkage. A runtime provider must export this fork's bridge symbols, not just upstream RE2's exports. There is no system-library build mode.
 
-## Support matrix
+## Platform boundaries
 
-The following summarizes the package's last recorded target check, not a fresh run:
-
-| Target | Known boundary |
+| Target | Boundary |
 |---|---|
-| `x86_64-linux-gnu`, `aarch64-linux-gnu`, `riscv64-linux-gnu`, `x86_64-windows-gnu` | The recorded `zig build check` compiled these targets. |
 | `aarch64-macos-none` and Darwin targets | The host needs Apple's SDK for `CoreFoundation`. |
-| `wasm32-wasi` | Runtime loading is unavailable. The recorded build is blocked by the compiler's disabled C++ threads/filesystem and an Abseil `poison.cc` issue. |
-| Other cross-test targets | Build and execution depend on target libc, toolchain, and runner availability. |
+| `wasm32-wasi` | Runtime loading is unavailable. The C++ runtime closure needs compiler thread and filesystem support, which is disabled for WASI; vendored Abseil also has an incompatible `poison.cc` branch. |
+| Other cross-targets | Build and execution depend on target libc, toolchain, and runner availability. |
 
 ## Consumption
 
@@ -50,8 +47,11 @@ Import module `re2` with `dep.module("re2")`; set `link_libc = true` on the cons
 | ELF dynamic | `libre2.so.11` | RE2 engine; upstream soname |
 | ELF dynamic | `libabsl.so.2505` | Abseil dependency; upstream soname |
 | ELF dynamic | `libre2bridge.so.0` | Fork's C bridge |
-| ELF dynamic only | `libre2cpp.so.0.16.0` | Zig 0.16.0 compiler's C++ runtime |
+| ELF dynamic only | `libre2cpp.so.0.17.0` | Zig 0.17.0 compiler's C++ runtime |
+
 Shared ELF installs also provide `.so.N` and `.so` symlinks and use `$ORIGIN` as the runtime search path. C++ consumers can include `<re2/re2.h>`; the C bridge header is `<re2_bridge.h>`. `pkg-config --libs re2` supplies the link flags.
+
+The `consumer` build step runs only directly native targets. It installs cross-target consumers without executing them, and uses the consumer package's own install prefix.
 
 Build options:
 

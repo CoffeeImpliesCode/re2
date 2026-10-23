@@ -26,6 +26,7 @@ The `vendor/re2` and `vendor/abseil-cpp` trees are unchanged. This file records 
 | `consumer/build.zig` | Builds a separate consumer package against the dependency. |
 | `consumer/build.zig.zon` | Declares the separate consumer package and its dependency. |
 | `consumer/src/main.zig` | Demonstrates facade use from the separate consumer package. |
+| `tools/consumer.zig` | Runs the nested consumer build with make-time toolchain and cache paths in its environment. |
 
 ## Build graph
 
@@ -35,6 +36,10 @@ The `vendor/re2` and `vendor/abseil-cpp` trees are unchanged. This file records 
 - `-Druntime=true` is independent of linkage: it generates provider dispatch and does not link the native archive into the facade.
 - Installs include the RE2 and Abseil headers, the bridge header, pkg-config metadata, and licence records.
 - `test` runs behavioral tests, `smoke` runs the example, and `check` compiles the library, bridge, facade, tests, and example for its target matrix without running them.
+- The `consumer` step runs only directly native targets and installs cross-target consumers without executing them.
+- The nested consumer uses its own install prefix because Zig 0.17 build scripts cannot inspect the parent build's prefix.
+- Zig 0.17 nested builds receive `ZIG_LIB_DIR` and `ZIG_GLOBAL_CACHE_DIR` through a host launcher because `zig build` rejects their command-line flags and run-step environment values cannot contain lazy paths.
+- The shared C++ runtime version and source list follow Zig 0.17.0, including libc++abi's `cxa_noexception.cpp`.
 - Windows adds Abseil's `dbghelp` dependency and an intrinsic-header prelude; Apple targets link CoreFoundation. NetBSD receives its feature-test and `alloca` compatibility defines.
 
 ## Platform boundaries
