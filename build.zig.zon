@@ -1,108 +1,33 @@
 .{
     .name = .re2,
-    // Upstream's own version record, and the version every artefact this
-    // package delivers is named from.  RE2 dates its releases rather than
-    // numbering them, so `vendor/re2` carries no `project(RE2 VERSION ...)`
-    // line at all (`vendor/re2/CMakeLists.txt:8` is `project(RE2 CXX)`); the
-    // tag is the version, and `build_support/re2_sources.zig` `version` holds
-    // the same string.  `build.zig` refuses to configure if the two drift.
-    //
-    // Note what this is *not* the version of: upstream's ABI number is
-    // separate and smaller.  `vendor/re2/CMakeLists.txt:43` sets `SONAME 11`
-    // and `:151` applies it, so the shared object is `libre2.so.11`, and
-    // `build.zig`'s `re2_abi_version` carries that number rather than this one.
     .version = "2025.11.5",
     .minimum_zig_version = "0.16.0",
 
-    // Identifies this package.  It belongs to this manifest only: it was
-    // chosen for this package and must not be copied from another one, in this
-    // workspace or anywhere else.  Zig uses it to tell two packages apart
-    // without reading either name, so two packages sharing one would collide
-    // in a build that depends on both.
     .fingerprint = 0x7869ab4e81980085,
 
-    // Nothing is fetched at build time, so there is no dependency to declare.
-    //
-    // google/re2 2025-11-05 is vendored at `vendor/re2`, and the Abseil LTS
-    // 20250512.1 that its own `MODULE.bazel` names is vendored at
-    // `vendor/abseil-cpp` (`build_support/absl_sources.zig`).  Both source
-    // lists are enumerated in `build_support`, not globbed, so the twenty-two
-    // RE2 translation units and the hundred-and-fifty-two Abseil ones this
-    // package compiles are the library without its tests -- a glob would have
-    // picked up every `*_test.cc` and every GoogleTest helper, and this package
-    // must not download or demand a test framework.
     .dependencies = .{},
 
     .paths = .{
         "build.zig",
         "build.zig.zon",
-        // This fork's `cross-test` profile: the build step and the two build
-        // defaults the published target matrix is run with.  It is discovered
-        // from the package root, so a dependent that materialises this package
-        // can run the same matrix; it selects no target and names no machine.
         "cross-test.profile.sh",
-        // The build-support helpers `build.zig` imports by name, plus the
-        // enumerated source lists they and the ELF shared route's C++ runtime
-        // builder read.  The directory is named whole, so
-        // `build_support/cpp_runtime.zig` -- the file that configures the pinned
-        // compiler's own libc++/libc++abi/libunwind into the `libre2cpp.so.0`
-        // a shared delivery installs -- travels with the package.  A
-        // materialised copy missing it would configure a shared build with no
-        // runtime source and fail to link one image's libc++ against another's.
         "build_support",
 
-        // The facade, the typed surface it publishes, the C header `addTranslateC`
-        // translates and the C++ translation unit that compiles it.
         "zig",
 
-        // The behavioural roots.  `tests.zig` is what `zig build test` runs and
-        // `smoke.zig` is what `zig build smoke` runs; `zig build check`
-        // compiles both for every target in its matrix without running them.
-        // They are named individually rather than through a directory, because
-        // they sit at the repository root next to `build.zig` and there is no
-        // directory that holds them: a materialised package without either would
-        // configure `test`, `smoke` and `check` to a root it cannot read.
         "tests.zig",
         "smoke.zig",
 
-        // The runtime-loading route: `runtime/graph.zig` builds the generated
-        // dispatch that `-Druntime=true` selects instead of the translated
-        // header module, `runtime/library.zig` is this SDK's descriptor, and the
-        // driver-supplied core beside them is `runtime/{loader.zig, generate.zig,
-        // sync.c, sync.h}`.  The directory is named as a whole so the route
-        // travels with the package: a materialised copy that left it out would
-        // configure `-Druntime=true` to a graph it cannot build.
         "runtime",
 
-        // The fork's independent fixtures, reached as the named module
-        // `foundation_fixtures` rather than by a relative path: a Zig module's
-        // root is its root source file's directory, so `tests.zig` and
-        // `smoke.zig` sit at the package root and cannot both reach
-        // `testdata/` by a path that is stable from each.  Named whole, because
-        // the module's root source file is `testdata/foundation-fixtures.zig`
-        // and the data it reads sits beside it.
         "testdata",
 
         "consumer/build.zig",
         "consumer/build.zig.zon",
         "consumer/src/main.zig",
 
-        // The vendored upstream C++ sources and their headers.  These are
-        // upstream's bytes: every path under `vendor/` is pinned by
-        // `UPSTREAM.sha256`, and `UPSTREAM.md` records the release, the
-        // commit and the tarball digest each tree came from.  `vendor` is named
-        // whole because RE2's sources spell their headers `re2/re2.h` and
-        // Abseil's spell theirs `absl/base/config.h`, so the include root *is*
-        // the tree: splitting the two roots into separately named file lists
-        // would put a package on disk whose headers do not resolve.
         "vendor",
 
-        // The advertised Nix and devenv entry points, so a fetched package
-        // carries the evaluation layer its own records describe rather than
-        // only the graph: `package.nix`'s static and shared derivations and
-        // their install guards, the flake, `flake.lock` recording the pinned
-        // nixpkgs input this tree resolves rather than a fresh one, and the
-        // `sdk:*` tasks those records name.
         "package.nix",
         "flake.nix",
         "flake.lock",
@@ -110,19 +35,8 @@
         "devenv.yaml",
         ".envrc",
 
-        // The helper scripts that are not a build input but are named by the
-        // package's own records.  Named whole because a helper's own inputs are
-        // its siblings and `tools/` is where they live; nothing in the build
-        // graph reads this directory, so a package that left it out would build
-        // and simply not carry the scripts.
         "tools",
 
-        // This fork's own records.  A private repository removes no upstream
-        // licence obligation, and `build.zig`'s `installLicenceRecords` installs
-        // `FORK-LICENSE.md` and `NOTICE.md` beside the two upstream licence
-        // texts, which makes both of them build inputs and not only records: a
-        // materialised package without either fails `zig build` at configure
-        // time, before it can install anything.
         "README.md",
         "README.zig.md",
         "UPSTREAM.md",
@@ -131,10 +45,5 @@
         "CHANGELOG.md",
         "FORK-NOTES.md",
         "UPSTREAM.sha256",
-        // `.github/` is deliberately absent, as it is across this workspace:
-        // the workflow is repository CI rather than package content, and no
-        // step of the build graph and no line of the provenance gate reads it.
-        // Naming a directory that does not exist would make `zig fetch` hash a
-        // missing entry.
     },
 }

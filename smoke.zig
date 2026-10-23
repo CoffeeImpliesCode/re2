@@ -1,81 +1,15 @@
 // SPDX-License-Identifier: BSD-3-Clause
-//
-//! A runnable, deterministic demonstration of the RE2 facade. `zig build smoke`
-//! runs this.
-//!
-//! ## Every number here was counted first
-//!
-//! One pattern with three capture groups is matched against one literal
-//! subject, and every span is compared with a byte offset that was counted by
-//! hand and written into the table below before this program was run. Nothing
-//! is derived from a call the program makes, so a change in the output is a
-//! change in RE2 or in the binding rather than a restatement of either.
-//!
-//! ```text
-//! offset 0123456789012345678
-//!         a chrisr:9000 here
-//! ```
-//!
-//! Counted: `a` at 0, space at 1, `chrisr` at 2..8, `:` at 8, `9000` at 9..13,
-//! space at 13, `here` at 14..18. Eighteen bytes. The pattern is
-//! `((\w+):([0-9]+))`, so group 2 takes `chrisr` and stops at the `:` that is
-//! not a word character, group 3 takes the four digits and stops at the space,
-//! and the two inner groups are adjacent, so group 1 is their span and group 0
-//! is the whole thing:
-//!
-//! ```text
-//!   group 0   2..13   "chrisr:9000"
-//!   group 1   2..13   "chrisr:9000"
-//!   group 2   2..8    "chrisr"
-//!   group 3   9..13   "9000"
-//! ```
-//!
-//! These are not invented numbers. They are the same pattern and subject
-//! upstream's own `TEST(RE2, Match)` uses, where it asserts the four captured
-//! texts (`vendor/re2/re2/testing/re2_test.cc:351-375`); upstream compares
-//! string_views, so it never had to name an offset and this program supplies
-//! them by counting.
-//!
-//! The byte unit is the point. RE2's subject is an `absl::string_view`
-//! (`vendor/re2/re2/stringpiece.h:14`) and `RE2::Match` slices with
-//! `remove_prefix`/`remove_suffix` against `text.size()`
-//! (`vendor/re2/re2/re2.cc:670-681`), so a three-byte character advances the
-//! offset by three. The table above is an ASCII subject, where that is not
-//! visible, so the demonstration also prints the nine-byte UTF-8 subject from
-//! upstream's `TEST(RE2, UTF8)` next to the same pattern under both encodings:
-//! `(.)` reports 0..3 under UTF-8 and 0..1 under Latin-1
-//! (`vendor/re2/re2/testing/re2_test.cc:1117-1125`).
-//!
-//! ## A borrow, shown rather than described
-//!
-//! The demonstration mutates the subject after matching and prints the capture
-//! again. A facade that copied the text would print the old bytes; the
-//! capture here is a window on the caller's own buffer, so it prints the byte
-//! that was just written. The span does not move when the byte changes, which
-//! is the other half of the same fact.
-//!
-//! ## Failures are errors
-//!
-//! Every offset is compared with an ordinary comparison and a mismatch returns
-//! an error, so the process exits non-zero. A debug assertion would be
-//! compiled out of a release build, which is not a check.
+//! Deterministic example of matching, byte offsets, borrowed captures, and errors.
+//! Expected spans are explicit; mismatches return errors.
+//! Runtime-loaded runs require an explicit bridge provider.
 
-/// The subject of upstream's `TEST(RE2, Match)`
-/// (`vendor/re2/re2/testing/re2_test.cc:361`), as an 18-element array.
-///
-/// The length is written into the type rather than inferred, so retyping this
-/// literal to a different length is a compile error here instead of a
-/// silently different census. Counted: 18 bytes, `a` at 0, space at 1,
-/// `chrisr` at 2..8, `:` at 8, `9000` at 9..13, space at 13, `here` at 14..18.
+/// The 18-byte subject from upstream's `TEST(RE2, Match)` (`vendor/re2/re2/testing/re2_test.cc:361`).
 const subject_bytes: [18]u8 = "a chrisr:9000 here".*;
 
-/// The same subject as a slice, for matching and for printing. 18 bytes.
 const subject_text: []const u8 = subject_bytes[0..];
 
 comptime {
-    // The census is the whole oracle, and a mistyped character in the subject
-    // literal would quietly move every offset below. These are the three facts
-    // the table in the module doc rests on.
+    // Pin the three byte offsets used by the expected captures.
     if (subject_bytes[8] != ':' or
         subject_bytes[13] != ' ' or
         subject_bytes[9] != '9')
@@ -88,16 +22,10 @@ comptime {
 const std = @import("std");
 const re2 = @import("re2");
 
-/// The pattern, matched against `subject_text` above.
-///
-/// Three capture groups and an inner pair, so the group layout is part of what
-/// is being demonstrated: `[^/:]+`-style narrowing is not used, because the
-/// digits and the word are what make the byte census checkable.
+/// Pattern with three captures; expected spans below pin its byte offsets.
 const pattern_text = "((\\w+):([0-9]+))";
 
-/// Upstream's `TEST(RE2, UTF8)` subject (`vendor/re2/re2/testing/re2_test.cc:
-/// 1098-1103`): three Japanese characters, nine bytes, spelled as the exact
-/// bytes upstream writes out.
+/// Nine-byte subject from upstream's `TEST(RE2, UTF8)` (`vendor/re2/re2/testing/re2_test.cc:1098-1103`).
 const utf8_bytes: [9]u8 = .{
     0xe6, 0x97, 0xa5, // U+65E5
     0xe6, 0x9c, 0xac, // U+68B0
@@ -120,7 +48,7 @@ const expectation = struct {
     end: usize,
 };
 
-/// Counted in the module doc. Nothing here is read back from a call.
+/// Hand-counted expected captures for the subject.
 const expected = [_]expectation{
     .{ .number = 0, .text = "chrisr:9000", .start = 2, .end = 13 },
     .{ .number = 1, .text = "chrisr:9000", .start = 2, .end = 13 },
@@ -128,24 +56,16 @@ const expected = [_]expectation{
     .{ .number = 3, .text = "9000", .start = 9, .end = 13 },
 };
 
-/// What this program was asked to do.
-///
-/// `run` is the demonstration. `pre_load` names a provider, loads it and stops,
-/// which is what a runtime-loading build's table needs before anything else can
-/// be called, and what a packaging check wants without running the whole
-/// demonstration.
+/// Select full demonstration or provider pre-load only.
 const Mode = enum { run, pre_load };
 
-/// The environment variable that names the provider in a runtime-loading build,
-/// when the command line does not.
+/// Runtime-loading provider variable.
 const provider_variable = "RE2_TEST_PROVIDER";
 
-/// A runtime-loading build has no provider until one is named.
+/// Error when runtime provider configuration is missing.
 const ConfigurationError = error{NoProviderConfigured};
 
-/// Failures that mean the library disagrees with a published answer. They are
-/// errors rather than assertions so the mismatch prints next to the value it
-/// contradicts, and the process exits non-zero.
+/// Published-answer mismatches are errors, not assertions.
 const SmokeError = error{
     ExamplePatternRejected,
     ExampleSubjectDidNotMatch,
@@ -156,15 +76,8 @@ const SmokeError = error{
     ExampleBorrowNotObserved,
 };
 
-/// The provider this run should load, from `--provider <path>` or from
-/// `RE2_TEST_PROVIDER`.
-///
-/// Both are explicit. Nothing here looks in a default location, and a build
-/// that was not told which file to load says so rather than loading something
-/// else. The named file has to be a shared build of this package's own bridge:
-/// every `re2br_*` symbol is defined in `zig/bridge.cc` here, so an installed
-/// upstream `libre2.so` exports none of them and the load refuses it with
-/// `MissingSymbol`.
+/// Selects a provider from `--provider` or `RE2_TEST_PROVIDER`; neither uses a default.
+/// It must export this package's `re2br_*` symbols or loading fails with `MissingSymbol`.
 fn providerRequest(init: std.process.Init) ConfigurationError![]const u8 {
     const args = init.minimal.args.toSlice(init.arena.allocator()) catch
         return noProvider();
@@ -179,8 +92,7 @@ fn providerRequest(init: std.process.Init) ConfigurationError![]const u8 {
         return noProvider();
 }
 
-/// Say which variable is missing. An error name on its own would send the next
-/// person into the loader instead of to the command line.
+/// Reports the required provider setting and returns the configuration error.
 fn noProvider() ConfigurationError {
     std.debug.print(
         "smoke: this is a runtime-loading build. Pass --provider <path>, or " ++
@@ -194,7 +106,6 @@ fn noProvider() ConfigurationError {
     return error.NoProviderConfigured;
 }
 
-/// The mode this run was asked for, from `--pre-load`.
 fn requestedMode(init: std.process.Init) Mode {
     const args = init.minimal.args.toSlice(init.arena.allocator()) catch return .run;
     for (args) |arg| {
@@ -208,9 +119,7 @@ pub fn main(init: std.process.Init) !void {
     var stdout = std.Io.File.stdout().writerStreaming(init.io, &buffer);
     const w = &stdout.interface;
 
-    // In a runtime-loading build every call below goes through a table that
-    // this one call fills. In a linked build the branch is not analysed at all
-    // and nothing is loaded, which is the ordinary configuration.
+    // Load the explicit provider only for runtime-loaded builds.
     if (comptime re2.runtime_loaded) {
         try re2.load(.{ .path = try providerRequest(init) });
     }
@@ -219,9 +128,7 @@ pub fn main(init: std.process.Init) !void {
         if (re2.runtime_loaded) "loaded" else "linked",
     });
 
-    // Printed, never asserted. Which release this binary was built from is a
-    // provenance fact, and a smoke run should report it rather than fail when
-    // the pin moves; `zig/root.zig` says the same about `version`.
+    // Print the version as provenance; a pin change is not a smoke failure.
     try w.print("re2 {s}\n", .{re2.version});
 
     const mode = requestedMode(init);
@@ -238,16 +145,12 @@ pub fn main(init: std.process.Init) !void {
         .{subject_text},
     );
 
-    // -----------------------------------------------------------------------
-    // The three capture groups
-    // -----------------------------------------------------------------------
     var regex = try re2.Regex.compile(pattern_text, .{});
     defer regex.deinit();
     try w.print("compiled, {d} capturing groups\n", .{regex.groupCount()});
     if (regex.groupCount() != 3) return SmokeError.ExampleOffsetMismatch;
 
-    // The subject is a copy this program owns and is entitled to write to,
-    // because the borrow demonstration below needs to write over a capture.
+    // This mutable copy lets the test observe that captures borrow subject bytes.
     var owned: [subject_bytes.len]u8 = subject_bytes;
     const subject = owned[0..];
 
@@ -291,13 +194,7 @@ pub fn main(init: std.process.Init) !void {
         });
     }
 
-    // -----------------------------------------------------------------------
-    // The capture is a borrow, not a copy
-    // -----------------------------------------------------------------------
-    //
-    // group 2 is `chrisr` at bytes 2..8, so byte 2 is the first byte of it.
-    // Writing there must change what the capture reads, and must NOT move the
-    // range.
+    // Overwrite a borrowed byte and verify its text changes without moving its range.
     const borrowed = (try data.group(subject, 2)).?;
     owned[2] = 'X';
     if (!std.mem.eql(u8, borrowed, "Xhrisr")) {
@@ -324,13 +221,7 @@ pub fn main(init: std.process.Init) !void {
         .{ borrowed, after_range.start, after_range.end },
     );
 
-    // -----------------------------------------------------------------------
-    // One code point, two byte lengths
-    // -----------------------------------------------------------------------
-    //
-    // `(.)` over the 9-byte subject of upstream's TEST(RE2, UTF8). Counted in
-    // the module doc: 0..3 under UTF-8, 0..1 under Latin-1. One code point
-    // either way; the offset differs because the unit is the byte.
+    // Compare upstream's nine-byte UTF-8 subject under both encodings.
     try w.print("\nUTF-8 byte census:\n  offset 012345678\n", .{});
     const multibyte = utf8_bytes[0..];
     var dot = try re2.Regex.compile("(.)", .{});
@@ -385,13 +276,7 @@ pub fn main(init: std.process.Init) !void {
         .{ 3, 1 },
     );
 
-    // -----------------------------------------------------------------------
-    // A subject the pattern must refuse
-    // -----------------------------------------------------------------------
-    //
-    // "zyzzyva" has no ':' and no digits, so neither \w+ nor [0-9]+ has
-    // anything to bind to. This is upstream's own negative subject for this
-    // exact pattern (vendor/re2/re2/testing/re2_test.cc:356).
+    // Upstream uses `zyzzyva` as a negative subject for this pattern (`vendor/re2/re2/testing/re2_test.cc:356`).
     if (try regex.match("zyzzyva", .{}, std.heap.page_allocator)) |unexpected| {
         var stale = unexpected;
         defer stale.deinit();
