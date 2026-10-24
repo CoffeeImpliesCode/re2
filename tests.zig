@@ -521,6 +521,70 @@ fn expectStatus(got: c_uint, want: c_uint, what: []const u8) !void {
     }
 }
 
+test "the_bridge_distinguishes_participating_and_absent_captures" {
+    nativeReady();
+    const c = re2.c;
+    const pattern = "(a)(b)?";
+    var handle: ?*c.Re2BridgeRegex = null;
+    defer c.re2br_regex_destroy(handle);
+    try expectStatus(c.re2br_compile(null, pattern.ptr, pattern.len, &handle), c.RE2BRIDGE_OK, "compile optional capture");
+    const regex = handle orelse return FixtureMismatch;
+    var spans: [3]c.Re2BridgeSpan = undefined;
+    var needed: usize = 0;
+
+    try expectStatus(
+        c.re2br_match(regex, c.RE2BRIDGE_ANCHOR_BOTH, "ab", 2, 0, 2, &spans, spans.len, &needed),
+        c.RE2BRIDGE_OK,
+        "match participating captures",
+    );
+    try std.testing.expectEqual(@as(usize, 3), needed);
+    try std.testing.expectEqual(@as(usize, 0), spans[0].start);
+    try std.testing.expectEqual(@as(usize, 2), spans[0].end);
+    try std.testing.expectEqual(@as(usize, 0), spans[1].start);
+    try std.testing.expectEqual(@as(usize, 1), spans[1].end);
+    try std.testing.expectEqual(@as(usize, 1), spans[2].start);
+    try std.testing.expectEqual(@as(usize, 2), spans[2].end);
+
+    try expectStatus(
+        c.re2br_match(regex, c.RE2BRIDGE_ANCHOR_BOTH, "a", 1, 0, 1, &spans, spans.len, &needed),
+        c.RE2BRIDGE_OK,
+        "match absent optional capture",
+    );
+    try std.testing.expectEqual(@as(usize, 3), needed);
+    try std.testing.expectEqual(@as(usize, 0), spans[0].start);
+    try std.testing.expectEqual(@as(usize, 1), spans[0].end);
+    try std.testing.expectEqual(@as(usize, 0), spans[1].start);
+    try std.testing.expectEqual(@as(usize, 1), spans[1].end);
+    try std.testing.expectEqual(std.math.maxInt(usize), spans[2].start);
+    try std.testing.expectEqual(std.math.maxInt(usize), spans[2].end);
+}
+
+test "the_bridge_anchors_both_ends_of_the_requested_range" {
+    nativeReady();
+    const c = re2.c;
+    const pattern = "(a)(b)";
+    var handle: ?*c.Re2BridgeRegex = null;
+    defer c.re2br_regex_destroy(handle);
+    try expectStatus(c.re2br_compile(null, pattern.ptr, pattern.len, &handle), c.RE2BRIDGE_OK, "compile anchored pattern");
+    const regex = handle orelse return FixtureMismatch;
+    var spans: [3]c.Re2BridgeSpan = undefined;
+    var needed: usize = 0;
+
+    try expectStatus(
+        c.re2br_match(regex, c.RE2BRIDGE_ANCHOR_BOTH, "zab", 3, 0, 3, &spans, spans.len, &needed),
+        c.RE2BRIDGE_NO_MATCH,
+        "both anchors reject a leading byte",
+    );
+    try expectStatus(
+        c.re2br_match(regex, c.RE2BRIDGE_ANCHOR_BOTH, "zab", 3, 1, 3, &spans, spans.len, &needed),
+        c.RE2BRIDGE_OK,
+        "both anchors match the selected range",
+    );
+    try std.testing.expectEqual(@as(usize, 3), needed);
+    try std.testing.expectEqual(@as(usize, 1), spans[0].start);
+    try std.testing.expectEqual(@as(usize, 3), spans[0].end);
+}
+
 test "the_bridge_leaves_a_callers_spans_alone_when_the_engine_declines" {
     nativeReady();
     // Reuse caller-owned spans to pin the bridge's no-match contract.

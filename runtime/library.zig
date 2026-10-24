@@ -51,7 +51,7 @@ const Anchor = struct {
     const start: c_int = 1; // :121, RE2BRIDGE_ANCHOR_START
     const both: c_int = 2; // :122, RE2BRIDGE_ANCHOR_BOTH
     /// Invalid ordinal rejected by the bridge.
-    const undefined: c_int = 3;
+    const invalid: c_int = 3;
 };
 
 /// Bridge encoding ordinals; default leaves RE2's `EncodingUTF8` choice unchanged.
@@ -62,7 +62,7 @@ const Encoding = struct {
     const utf8: i32 = 1; // :116, RE2BRIDGE_ENCODING_UTF8
     const latin1: i32 = 2; // :117, RE2BRIDGE_ENCODING_LATIN1
     /// Invalid ordinal rejected by the bridge.
-    const undefined: i32 = 3;
+    const invalid: i32 = 3;
 };
 
 /// Tri-state option values; zero preserves RE2's defaults.
@@ -111,7 +111,7 @@ fn applyOption(comptime dispatch: type, comptime probe: OptionProbe, out: *dispa
         .encoding_default => out.encoding = Encoding.default,
         .encoding_utf8 => out.encoding = Encoding.utf8,
         .encoding_latin1 => out.encoding = Encoding.latin1,
-        .encoding_undefined => out.encoding = Encoding.undefined,
+        .encoding_undefined => out.encoding = Encoding.invalid,
     }
 }
 
@@ -120,7 +120,7 @@ fn matchStatusIs(
     comptime dispatch: type,
     dst: *const dispatch.Table,
     comptime probe: OptionProbe,
-    comptime pattern: []const u8,
+    pattern: []const u8,
     comptime text: []const u8,
     expected: c_uint,
 ) bool {
@@ -310,15 +310,36 @@ pub fn Config(comptime dispatch: type) type {
                     "size_t fields (zig/bridge.h:198-201) are not where this " ++
                     "build's translation says they are";
             }
-            // An unmatched capture is `SIZE_MAX` in both span fields (`zig/bridge.cc:272-279`).
-            if (spans[1].start != no_match_span or spans[1].end != no_match_span or
-                spans[2].start != no_match_span or spans[2].end != no_match_span)
+            if (spans[1].start != 0 or spans[1].end != 1 or
+                spans[2].start != 1 or spans[2].end != 2)
             {
-                return "re2br_match did not report the two groups of \"(a)(b)\" " ++
-                    "that took no part as RE2BRIDGE_NO_MATCH in both fields of " ++
-                    "their spans, which is what zig/bridge.cc:268-269 writes and " ++
-                    "what makes a group with no range distinguishable from a " ++
-                    "match at offset 0";
+                return "re2br_match did not report the participating captures of " ++
+                    "\"(a)(b)\" over \"ab\" as [0, 1) and [1, 2)";
+            }
+
+            {
+                const pattern = "(a)(b)?";
+                var optional_regex: ?*dispatch.Re2BridgeRegex = null;
+                defer dst.re2br_regex_destroy(optional_regex);
+                if (dst.re2br_compile(null, pattern.ptr, pattern.len, &optional_regex) != Status.ok or optional_regex == null) {
+                    return "re2br_compile(\"(a)(b)?\") did not report success";
+                }
+                if (dst.re2br_match(optional_regex.?, Anchor.both, "a", 1, 0, 1, &spans, spans.len, &span_count) != Status.ok or
+                    span_count != spans.len)
+                {
+                    return "re2br_match did not match \"(a)(b)?\" over \"a\" with three spans";
+                }
+                if (spans[0].start != 0 or spans[0].end != 1 or
+                    spans[1].start != 0 or spans[1].end != 1)
+                {
+                    return "re2br_match did not report the overall match and participating " ++
+                        "capture of \"(a)(b)?\" over \"a\" as [0, 1)";
+                }
+                // Only the optional second capture is absent (`zig/bridge.cc:271-279`).
+                if (spans[2].start != no_match_span or spans[2].end != no_match_span) {
+                    return "re2br_match did not report SIZE_MAX in both fields of " ++
+                        "the absent second capture of \"(a)(b)?\" over \"a\"";
+                }
             }
 
             if (dst.re2br_match(regex.?, Anchor.unanchored, "zz", 2, 0, 2, &spans, 3, &span_count) != Status.no_match) {
@@ -334,7 +355,7 @@ pub fn Config(comptime dispatch: type) type {
                     "rather than forward to RE2::Match";
             }
 
-            if (dst.re2br_match(regex.?, Anchor.undefined, "ab", 2, 0, 2, null, 0, &span_count) != Status.invalid_argument) {
+            if (dst.re2br_match(regex.?, Anchor.invalid, "ab", 2, 0, 2, null, 0, &span_count) != Status.invalid_argument) {
                 return "re2br_match accepted the anchor ordinal 3, which " ++
                     "zig/bridge.h:119-122 does not define, so this provider is " ++
                     "not checking the anchor against the three ordinals that " ++
@@ -352,11 +373,12 @@ pub fn Config(comptime dispatch: type) type {
                     "1 of \"zabz\", so this provider's start anchor is not the one " ++
                     "vendor/re2/re2/re2.h:544 describes";
             }
-            // Both-end anchoring requires the match to end at `endpos`.
-            if (dst.re2br_match(regex.?, Anchor.both, "zabz", 4, 0, 4, &spans, 3, &span_count) != Status.no_match) {
-                return "re2br_match with RE2BRIDGE_ANCHOR_BOTH matched inside " ++
-                    "\"zabz\" rather than requiring the match to end at endpos, " ++
-                    "which is what vendor/re2/re2/re2.h:545 describes";
+            // Both-end anchoring requires the full [startpos, endpos) range.
+            if (dst.re2br_match(regex.?, Anchor.both, "zabz", 4, 0, 4, &spans, 3, &span_count) != Status.no_match or
+                dst.re2br_match(regex.?, Anchor.both, "zab", 3, 0, 3, &spans, 3, &span_count) != Status.no_match)
+            {
+                return "re2br_match with RE2BRIDGE_ANCHOR_BOTH matched \"(a)(b)\" " ++
+                    "inside \"zabz\" or \"zab\" rather than matching both range boundaries";
             }
             if (dst.re2br_match(regex.?, Anchor.start, "abz", 3, 0, 3, &spans, 3, &span_count) != Status.ok or
                 spans[0].start != 0 or spans[0].end != 2)
@@ -365,12 +387,11 @@ pub fn Config(comptime dispatch: type) type {
                     "\"(a)(b)\" at the start of \"abz\", so the start anchor is " ++
                     "either being ignored or being read as both";
             }
-            if (dst.re2br_match(regex.?, Anchor.both, "zab", 3, 0, 3, &spans, 3, &span_count) != Status.ok or
+            if (dst.re2br_match(regex.?, Anchor.both, "zab", 3, 1, 3, &spans, 3, &span_count) != Status.ok or
                 spans[0].start != 1 or spans[0].end != 3)
             {
-                return "re2br_match with RE2BRIDGE_ANCHOR_BOTH did not match at " ++
-                    "offset 1 of \"zab\", where the match does end at endpos, so " ++
-                    "the both-ends anchor is not being applied at all";
+                return "re2br_match with RE2BRIDGE_ANCHOR_BOTH did not match " ++
+                    "\"(a)(b)\" over the selected [1, 3) range of \"zab\"";
             }
 
             // `BAD_PATTERN` can still return a handle for reading the error; destroy it.

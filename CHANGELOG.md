@@ -1,5 +1,9 @@
 # Changelog
 
+- Fix runtime provider validation of participating and absent captures and both-end anchored match ranges for static and dynamic delivery.
+- Fix runtime provider validation of patterns produced by `QuoteMeta` for both static and dynamic delivery.
+- Fix duplicate C++ ABI symbols in ELF shared builds and runtime-provider installs by excluding the no-exceptions implementation.
+- Fix Zig 0.17 shared-runtime assertion configuration, consumer linkage/runtime forwarding, runtime validator identifiers, and dynamic-loader filtering in `check`.
 - Port to Zig 0.17.0.
 - The consumer build forwards toolchain and global-cache paths through the environment for Zig 0.17.
 - The consumer build uses its own install prefix because Zig 0.17 build scripts cannot inspect the parent prefix.

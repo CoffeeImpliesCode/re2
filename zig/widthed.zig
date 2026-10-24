@@ -86,7 +86,7 @@ pub fn Width(comptime code_unit: type) type {
         /// Needed because some upstream options default to true.
         pub const Flag = enum(u8) {
             /// Leave upstream's own default.
-            @"default",
+            default,
             /// Force the option on: `RE2::Options::set_<name>(true)`.
             on,
             /// Force the option off: `RE2::Options::set_<name>(false)`.
@@ -103,17 +103,17 @@ pub fn Width(comptime code_unit: type) type {
             /// Upstream `max_mem`; zero selects its 8 MiB default.
             max_mem: i64 = 0,
             encoding: Encoding = .utf8,
-            posix_syntax: Flag = .@"default",
-            longest_match: Flag = .@"default",
-            log_errors: Flag = .@"default",
-            literal: Flag = .@"default",
-            never_nl: Flag = .@"default",
-            dot_nl: Flag = .@"default",
-            never_capture: Flag = .@"default",
-            case_sensitive: Flag = .@"default",
-            perl_classes: Flag = .@"default",
-            word_boundary: Flag = .@"default",
-            one_line: Flag = .@"default",
+            posix_syntax: Flag = .default,
+            longest_match: Flag = .default,
+            log_errors: Flag = .default,
+            literal: Flag = .default,
+            never_nl: Flag = .default,
+            dot_nl: Flag = .default,
+            never_capture: Flag = .default,
+            case_sensitive: Flag = .default,
+            perl_classes: Flag = .default,
+            word_boundary: Flag = .default,
+            one_line: Flag = .default,
         };
 
         /// Subject range and anchor for a search.

@@ -13,7 +13,7 @@ The `vendor/re2` and `vendor/abseil-cpp` trees are unchanged. This file records 
 | `zig/widthed.zig` | Provides width-specific facade calls and rejects unsupported subject widths. |
 | `runtime/graph.zig` | Wires translated declarations, generated dispatch, loader, and synchronization into runtime mode. |
 | `runtime/generate.zig` | Generates runtime dispatch and patched translation from `addTranslateC` output. |
-| `runtime/library.zig` | Describes and validates an RE2 bridge provider before publication. |
+| `runtime/library.zig` | Validates provider options, participating and absent capture spans, anchored match ranges, and buffer contracts before publication. |
 | `runtime/loader.zig` | Loads one explicit provider with synchronized publication and retryable failures. |
 | `runtime/sync.h` | Declares the prefixable synchronization ABI used by the loader. |
 | `runtime/sync.c` | Implements the loader's lock, wait, broadcast, and thread identity operations. |
@@ -35,11 +35,11 @@ The `vendor/re2` and `vendor/abseil-cpp` trees are unchanged. This file records 
 - Static libraries are the default. `-Dlinkage=dynamic` delivers shared libraries when the target has a dynamic linker; ELF dynamic delivery also builds `re2cpp` as the shared C++ runtime.
 - `-Druntime=true` is independent of linkage: it generates provider dispatch and does not link the native archive into the facade.
 - Installs include the RE2 and Abseil headers, the bridge header, pkg-config metadata, and licence records.
-- `test` runs behavioral tests, `smoke` runs the example, and `check` compiles the library, bridge, facade, tests, and example for its target matrix without running them.
-- The `consumer` step runs only directly native targets and installs cross-target consumers without executing them.
+- `test` runs behavioral tests, `smoke` runs the example, and `check` compiles the library, bridge, facade, tests, and example for its target matrix without running them. Shared and runtime-loaded matrix builds omit targets without a dynamic loader.
+- The `consumer` step forwards linkage and runtime mode to the dependency, runs only directly native targets, and installs cross-target consumers without executing them.
 - The nested consumer uses its own install prefix because Zig 0.17 build scripts cannot inspect the parent build's prefix.
 - Zig 0.17 nested builds receive `ZIG_LIB_DIR` and `ZIG_GLOBAL_CACHE_DIR` through a host launcher because `zig build` rejects their command-line flags and run-step environment values cannot contain lazy paths.
-- The shared C++ runtime version and source list follow Zig 0.17.0, including libc++abi's `cxa_noexception.cpp`.
+- The shared C++ runtime version and source selection follow Zig 0.17.0's threaded, exception-enabled non-WASI configuration; `cxa_noexception.cpp` is excluded. Its runtime and dependent C++ modules share the compiler's fast-mode hardening and assertion-semantic defaults.
 - Windows adds Abseil's `dbghelp` dependency and an intrinsic-header prelude; Apple targets link CoreFoundation. NetBSD receives its feature-test and `alloca` compatibility defines.
 
 ## Platform boundaries

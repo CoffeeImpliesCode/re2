@@ -24,7 +24,7 @@ Static linkage is the default. Dynamic linkage builds shared libraries. The runt
 | Target | Boundary |
 |---|---|
 | `aarch64-macos-none` and Darwin targets | The host needs Apple's SDK for `CoreFoundation`. |
-| `wasm32-wasi` | Runtime loading is unavailable. The C++ runtime closure needs compiler thread and filesystem support, which is disabled for WASI; vendored Abseil also has an incompatible `poison.cc` branch. |
+| `wasm32-wasi` | Static delivery only; runtime loading is unavailable. The C++ runtime closure needs compiler thread and filesystem support, which is disabled for WASI; vendored Abseil also has an incompatible `poison.cc` branch. |
 | Other cross-targets | Build and execution depend on target libc, toolchain, and runner availability. |
 
 ## Consumption
@@ -51,13 +51,22 @@ Import module `re2` with `dep.module("re2")`; set `link_libc = true` on the cons
 
 Shared ELF installs also provide `.so.N` and `.so` symlinks and use `$ORIGIN` as the runtime search path. C++ consumers can include `<re2/re2.h>`; the C bridge header is `<re2_bridge.h>`. `pkg-config --libs re2` supplies the link flags.
 
-The `consumer` build step runs only directly native targets. It installs cross-target consumers without executing them, and uses the consumer package's own install prefix.
+The `consumer` build step uses the selected linkage and runtime mode and runs only directly native targets. It installs cross-target consumers without executing them, and uses the consumer package's own install prefix.
+
+For runtime-loaded tests on Linux, first install a shared provider and select the bridge:
+
+```sh
+zig build install -Dlinkage=dynamic --prefix zig-out/provider
+export RE2_TEST_PROVIDER="$PWD/zig-out/provider/lib/libre2bridge.so.0"
+zig build test smoke consumer -Druntime=true
+zig build test smoke consumer -Dlinkage=dynamic -Druntime=true
+```
 
 Build options:
 
 | Option | Effect |
 |---|---|
-| `-Dtarget=<triple>` | Build one target; without it, `check` uses the six package targets. |
+| `-Dtarget=<triple>` | Build one target; without it, `check` uses the six package targets, excluding targets without a dynamic loader when shared delivery or runtime loading is selected. |
 | `-Dlinkage=static` / `-Dlinkage=dynamic` | Select static archives or shared libraries; default is `static`. |
 | `-Druntime=true` | Use the runtime dispatch instead of directly linking the bridge. |
 | `-Doptimize=<mode>` | Select Zig's standard optimization mode. |

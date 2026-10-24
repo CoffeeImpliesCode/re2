@@ -8,10 +8,14 @@ const std = @import("std");
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const linkage = b.option(std.builtin.LinkMode, "linkage", "Select static or shared native libraries") orelse .static;
+    const runtime_loaded = b.option(bool, "runtime", "Load an explicit bridge provider at runtime") orelse false;
 
     const dep = b.dependency("re2", .{
         .target = target,
         .optimize = optimize,
+        .linkage = linkage,
+        .runtime = runtime_loaded,
     });
 
     const exe_mod = b.createModule(.{

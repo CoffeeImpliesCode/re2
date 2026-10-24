@@ -158,7 +158,9 @@ pub fn build(b: *std.Build) void {
         addCheck(b, check_step, target, optimize, linkage, runtime_loaded);
     } else {
         for (check_targets) |query| {
-            addCheck(b, check_step, b.resolveTargetQuery(query), optimize, linkage, runtime_loaded);
+            const check_target = b.resolveTargetQuery(query);
+            if ((linkage == .dynamic or runtime_loaded) and !targetHasDynamicLinker(check_target)) continue;
+            addCheck(b, check_step, check_target, optimize, linkage, runtime_loaded);
         }
     }
 
@@ -483,14 +485,6 @@ fn addCheck(
     linkage: std.builtin.LinkMode,
     runtime_loaded: bool,
 ) void {
-    // Report an unsupported target per matrix cell so the other targets run.
-    if (linkage == .dynamic and !targetHasDynamicLinker(target)) {
-        step.dependOn(&b.addFail(b.fmt(
-            "re2: check cannot deliver shared objects for {s}; no static substitution. Use -Dlinkage=static.",
-            .{@tagName(target.result.os.tag)},
-        )).step);
-        return;
-    }
     const built = addGraph(b, target, optimize, linkage, runtime_loaded, false);
     step.dependOn(&addTests(b, target, optimize, built.module, "re2-analyze").step);
     step.dependOn(&addSmoke(b, target, optimize, built.module).step);

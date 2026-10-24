@@ -26,10 +26,9 @@
 //! compiler's build definition for libc++, libc++abi and libunwind. The
 //! original transcription came from `src/libs/libcxx.zig` at
 //! 24fdd5b7a4c1c8b5deb5b56756b9dbc8e08c86a8 (Zig 0.16.0), via the
-//! s2geometry fork's `build_support/cpp_runtime.zig`. The source lists are
-//! reconciled against Zig 0.17.0: its libc++abi list adds
-//! `src/cxa_noexception.cpp`. The current compiler build definition remains
-//! the authority for these source sets, flags and per-target configuration.
+//! s2geometry fork's `build_support/cpp_runtime.zig`. Source selection follows
+//! Zig 0.17.0's threaded, exception-enabled non-WASI configuration in
+//! `src/libs/libcxx.zig`.
 //!
 //! What is *not* re-derived here, and why that is honest: the file list, the
 //! macro set and the libunwind source list are the compiler's, not this
@@ -75,6 +74,9 @@ pub fn configureHeaders(b: *std.Build, module: *std.Build.Module, target: std.Bu
     module.addCMacro("_LIBCPP_HAS_VENDOR_AVAILABILITY_ANNOTATIONS", "0");
     // This runtime uses fast optimization for debug and safe builds.
     module.addCMacro("_LIBCPP_HARDENING_MODE", "_LIBCPP_HARDENING_MODE_NONE");
+    // Zig 0.17 src/libs/libcxx.zig configures the fast runtime with this default.
+    // hardening.h derives _LIBCPP_ASSERTION_SEMANTIC from it.
+    module.addCMacro("_LIBCPP_ASSERTION_SEMANTIC_DEFAULT", "_LIBCPP_ASSERTION_SEMANTIC_IGNORE");
     for ([_][]const u8{
         "_LIBCPP_HAS_MONOTONIC_CLOCK",
         "_LIBCPP_HAS_TERMINAL",
@@ -301,13 +303,9 @@ const libcxx_files = [_][]const u8{
     "src/thread.cpp",
 };
 
-// The exception-enabled non-WASI list, including thread-local destructors.
-// `cxa_exception_storage.cc` is the storage a thrown `RE2::Options` copy or
-// an `absl::Status` payload lands in; `cxa_thread_atexit.cpp` is the
-// thread-local teardown the `has_thread_local_destructor` path needs. Both are
-// in the list because `zig/bridge.cc:182` and `:351` catch
-// `std::bad_alloc` and RE2 throws through `RE2::Options`
-// (`vendor/re2/re2/re2.h:678-692`).
+// Zig 0.17 src/libs/libcxx.zig:386-393 excludes cxa_noexception.cpp on
+// non-WASI targets. It defines the same ABI symbols as cxa_exception.cpp.
+// This threaded ELF runtime uses exceptions and thread-local destructors.
 const libcxxabi_files = [_][]const u8{
     "src/cxa_aux_runtime.cpp",
     "src/cxa_default_handlers.cpp",
@@ -326,6 +324,5 @@ const libcxxabi_files = [_][]const u8{
     "src/private_typeinfo.cpp",
     "src/cxa_exception.cpp",
     "src/cxa_personality.cpp",
-    "src/cxa_noexception.cpp",
     "src/cxa_thread_atexit.cpp",
 };

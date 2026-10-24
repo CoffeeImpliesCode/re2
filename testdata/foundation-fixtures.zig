@@ -70,7 +70,6 @@
 //! `empty_branch_participates_where_the_other_branch_did_not` case below takes
 //! the second reading, which is the one a caller passing a real buffer gets.
 //!
-
 //!
 //! ## Pinned
 //!
@@ -239,7 +238,6 @@ comptime {
     if (no_host_subject.len != 7)
         @compileError("no_host_subject must be the 7 bytes of re2_test.cc:356");
 }
-
 
 // ---------------------------------------------------------------------------
 // The known answers
