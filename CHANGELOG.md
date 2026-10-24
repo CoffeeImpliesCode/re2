@@ -1,5 +1,6 @@
 # Changelog
 
+- Fix static and dynamic installs placing Abseil headers under `include/absl/absl` instead of `include/absl`.
 - Fix runtime provider validation of participating and absent captures and both-end anchored match ranges for static and dynamic delivery.
 - Fix runtime provider validation of patterns produced by `QuoteMeta` for both static and dynamic delivery.
 - Fix duplicate C++ ABI symbols in ELF shared builds and runtime-provider installs by excluding the no-exceptions implementation.

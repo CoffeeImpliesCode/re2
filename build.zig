@@ -420,7 +420,7 @@ fn addBridge(
         );
     }
     lib.installHeadersDirectory(
-        b.path(absl_sources.include_dir),
+        b.path(absl_sources.include_dir ++ "/absl"),
         "absl",
         .{ .include_extensions = &absl_header_extensions },
     );
