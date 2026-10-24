@@ -31,10 +31,8 @@ Static linkage is the default. Dynamic linkage builds shared libraries. The runt
 
 Add the package to `build.zig.zon`:
 
-```zig
-.dependencies = .{
-    .re2 = .{ .path = "../re2" },
-},
+```sh
+zig fetch --save git+https://github.com/CoffeeImpliesCode/re2#v2025.11.5
 ```
 
 Import module `re2` with `dep.module("re2")`; set `link_libc = true` on the consumer module. The package carries the native closure, so consumers do not add include paths or link library names.
